@@ -29,7 +29,7 @@ export default function Devices() {
     deviceName: '',
     deviceUid: '',
     deviceKind: 'MQTT_GATEWAY',
-    channels: [{ ...emptyChannel, channelId: '1' }],
+    channels: [],
   });
 
   const tenantId = searchParams.get('tenantId') || '';
@@ -83,7 +83,7 @@ export default function Devices() {
         deviceUid: form.deviceUid || undefined,
         deviceKind: form.deviceKind,
         channels: form.channels
-          .filter((c) => c.measurementType)
+          .filter((c) => (c.channelId || '').trim() || (c.instrumentTag || '').trim())
           .map((c) => ({
             channelId: c.channelId || undefined,
             measurementType: c.measurementType,
@@ -112,7 +112,8 @@ export default function Devices() {
         <Box>
           <Typography variant="h5" fontWeight={700}>Devices</Typography>
           <Typography variant="body2" color="text.secondary">
-            Register gateways against a tenant and plant, then export the hardware configuration.
+            Register a device once, assign tenant and plant, then give the hardware engineer the provisioning file.
+            Nodes and sensors appear automatically from authenticated telemetry.
           </Typography>
         </Box>
         <Button startIcon={<Add />} variant="contained" onClick={() => setOpen(true)}>Register device</Button>
@@ -158,13 +159,14 @@ export default function Devices() {
                 <TableCell>Plant</TableCell>
                 <TableCell>Kind</TableCell>
                 <TableCell>Status</TableCell>
+                <TableCell>Sensors</TableCell>
                 <TableCell>Last seen</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {devices.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6}>No devices yet. Register a gateway after the plant belongs to a tenant.</TableCell>
+                  <TableCell colSpan={7}>No devices yet. Register a gateway after the plant belongs to a tenant.</TableCell>
                 </TableRow>
               )}
               {devices.map((d) => (
@@ -173,7 +175,8 @@ export default function Devices() {
                   <TableCell>{d.tenantName || '—'}</TableCell>
                   <TableCell>{d.plantName || d.plantId}</TableCell>
                   <TableCell>{d.deviceKind}</TableCell>
-                  <TableCell><Chip size="small" label={d.connectionStatus || d.lifecycle} /></TableCell>
+                  <TableCell><Chip size="small" label={d.status || d.connectionStatus || d.lifecycle} color={d.status === 'ONLINE' ? 'success' : d.status === 'SUSPENDED' ? 'error' : 'default'} /></TableCell>
+                  <TableCell>{d.sensorCount ?? (d.channels || []).length}</TableCell>
                   <TableCell>{d.lastSeenAt || '—'}</TableCell>
                 </TableRow>
               ))}
@@ -231,7 +234,10 @@ export default function Devices() {
               </TextField>
             </Grid>
             <Grid item xs={12}>
-              <Typography variant="subtitle2" sx={{ mb: 1 }}>Sensor channels</Typography>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>Optional channel pre-declaration</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                Leave empty to let SWARM discover sensors from MQTT. Hardware GPIO mapping is not configured here.
+              </Typography>
               {form.channels.map((channel, index) => (
                 <Grid container spacing={1} key={index} sx={{ mb: 1 }}>
                   <Grid item xs={3}>

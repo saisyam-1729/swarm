@@ -38,7 +38,9 @@ public class SensorReadingRepositoryImpl implements SensorReadingRepositoryCusto
             LEFT JOIN device_channels dc ON dc.device_id = d.id AND dc.channel_id = r.channel_id
             """;
 
-    private static final String PLANT_MATCH = """
+    // Leading space is required: callers concatenate after "WHERE" with no trailing space
+    // ("WHERE """ + PLANT_MATCH). Without it the SQL becomes WHERECOALESCE(...).
+    private static final String PLANT_MATCH = " " + """
             COALESCE(dr.plant_id, CAST(jsonb_extract_path_text(r.metadata, 'plant_id') AS bigint)) = :plantId
             """;
 

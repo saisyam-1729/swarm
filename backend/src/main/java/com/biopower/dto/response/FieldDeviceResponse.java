@@ -23,8 +23,13 @@ public class FieldDeviceResponse {
     private String deviceName;
     private DeviceKind deviceKind;
     private DeviceLifecycle lifecycle;
+    /** Derived: REGISTERED, PROVISIONED, AWAITING_TELEMETRY, ONLINE, OFFLINE, SUSPENDED, RETIRED. */
+    private String status;
+    private String provisioningStatus;
     private boolean legacyCompat;
     private boolean hasCredentials;
+    private int nodeCount;
+    private int sensorCount;
     private LocalDateTime lastSeenAt;
     private String lastIp;
     private Integer lastRssi;

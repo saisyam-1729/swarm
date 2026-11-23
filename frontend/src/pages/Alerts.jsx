@@ -1,14 +1,20 @@
 // PURPOSE: SWARM plant-app page: Alerts.
 import { useState, useEffect } from 'react';
 import {
-  Box, Typography, Card, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
-  Chip, Button, Tabs, Tab, CircularProgress, FormControl, InputLabel, Select, MenuItem,
+  Box, Card, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
+  Button, Tabs, Tab, CircularProgress, FormControl, InputLabel, Select, MenuItem,
 } from '@mui/material';
 import { CheckCircle, DoneAll } from '@mui/icons-material';
 import { alertAPI, plantAPI } from '../services/api';
 import { formatDate } from '../utils/constants';
-import { pageTitleSx, responsiveSelect } from '../utils/responsive';
+import { responsiveSelect } from '../utils/responsive';
 import EmptyState from '../components/common/EmptyState';
+import PageHeader from '../components/common/PageHeader';
+import StatusBadge from '../components/common/StatusBadge';
+import LoadingSkeleton from '../components/common/LoadingSkeleton';
+import ErrorState from '../components/common/ErrorState';
+import CollectionPager from '../components/common/CollectionPager';
+import useCollection from '../utils/useCollection';
 
 export default function Alerts({ fixedPlantId, embedded = false, hidePlantSelector = false }) {
   const [plants, setPlants] = useState([]);
@@ -74,11 +80,20 @@ export default function Alerts({ fixedPlantId, embedded = false, hidePlantSelect
     loadAlerts();
   };
 
-  const severityColor = (s) => s === 'CRITICAL' ? 'error' : s === 'WARNING' ? 'warning' : 'info';
+  const collection = useCollection(alerts, {
+    searchKeys: ['title', 'message', 'plantName', 'severity'],
+    initialSortKey: 'createdAt',
+    initialSortDir: 'desc',
+    pageSize: 25,
+  });
 
   return (
     <Box>
-      {!embedded && <Typography variant="h5" sx={{ mb: 3, ...pageTitleSx }}>Alert Management</Typography>}
+      <PageHeader
+        hidden={embedded}
+        title="Alert management"
+        subtitle="Incidents for the selected plant. Counts and rows come from the alerts API."
+      />
 
       {!plantsLoaded ? (
         <Box sx={{ p: 4, textAlign: 'center' }}><CircularProgress /></Box>
@@ -108,15 +123,10 @@ export default function Alerts({ fixedPlantId, embedded = false, hidePlantSelect
         <Tab label="Active" /><Tab label="Acknowledged" /><Tab label="Resolved" />
       </Tabs>
 
-      {loadError && (
-        <EmptyState
-          title="Alerts unavailable"
-          description={loadError}
-        />
-      )}
+      {loadError && <ErrorState description={loadError} onRetry={loadAlerts} />}
 
       <Card>
-        {loading ? <Box sx={{ p: 4, textAlign: 'center' }}><CircularProgress /></Box> : (
+        {loading ? <LoadingSkeleton variant="table" count={6} /> : (
           <TableContainer>
             <Table>
               <TableHead>
@@ -126,16 +136,16 @@ export default function Alerts({ fixedPlantId, embedded = false, hidePlantSelect
                 </TableRow>
               </TableHead>
               <TableBody>
-                {alerts.length === 0 ? (
-                  <TableRow><TableCell colSpan={6} align="center">
-                    No alerts in this state. The plant is operating without open incidents.
+                {collection.items.length === 0 ? (
+                  <TableRow><TableCell colSpan={6}>
+                    <EmptyState compact title="No alerts in this state" description="The plant is operating without open incidents." />
                   </TableCell></TableRow>
-                ) : alerts.map((a) => (
-                  <TableRow key={a.id}>
+                ) : collection.items.map((a) => (
+                  <TableRow key={a.id} hover>
                     <TableCell>{a.plantName}</TableCell>
                     <TableCell>{a.title}</TableCell>
                     <TableCell sx={{ maxWidth: 300 }}>{a.message}</TableCell>
-                    <TableCell><Chip label={a.severity} size="small" color={severityColor(a.severity)} /></TableCell>
+                    <TableCell><StatusBadge status={a.severity} /></TableCell>
                     <TableCell>{formatDate(a.createdAt)}</TableCell>
                     <TableCell>
                       {a.status === 'ACTIVE' && (
@@ -150,6 +160,18 @@ export default function Alerts({ fixedPlantId, embedded = false, hidePlantSelect
               </TableBody>
             </Table>
           </TableContainer>
+        )}
+        {!loading && (
+          <Box sx={{ px: 2, pb: 1 }}>
+            <CollectionPager
+              page={collection.page}
+              pageCount={collection.pageCount}
+              total={collection.total}
+              filteredCount={collection.filteredCount}
+              onPage={collection.setPage}
+              pageSize={25}
+            />
+          </Box>
         )}
       </Card>
     </Box>

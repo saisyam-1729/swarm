@@ -9,6 +9,8 @@ services:
       POSTGRES_DB: ${DB_NAME:-swarm}
       POSTGRES_USER: ${DB_USER:-swarm}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5434:5432"
     volumes:
       - swarm_pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -47,8 +49,13 @@ services:
     image: eclipse-mosquitto:2
     container_name: swarm-mqtt
     restart: unless-stopped
+    environment:
+      MQTT_BACKEND_USER: ${MQTT_USER:-swarm-backend}
+      MQTT_BACKEND_PASSWORD: ${MQTT_PASSWORD:-changeme-mqtt-backend}
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
     volumes:
       - ./docker/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./docker/mosquitto/entrypoint.sh:/entrypoint.sh:ro
       - swarm_mqtt_data:/mosquitto/data
     # Host 1883 is used by swarm-iot-mosquitto. Publish loopback 1884 only so LAN tests can
     # reach SWARM Mosquitto without competing for 1883. Backend still uses mosquitto:1883.
@@ -64,16 +71,24 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: prod
       SPRING_FLYWAY_VALIDATE_ON_MIGRATE: "true"
-      DB_HOST: postgres
-      DB_PORT: 5432
+      # Local Compose DB. For Pi→cloud demo, set SPRING_DATASOURCE_URL / DB_* in .env instead.
+      DB_HOST: ${DB_HOST:-postgres}
+      DB_PORT: ${DB_PORT:-5432}
       DB_NAME: ${DB_NAME:-swarm}
       DB_USER: ${DB_USER:-swarm}
       DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      DB_SSL_MODE: ${DB_SSL_MODE:-disable}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://127.0.0.1,http://localhost:80}
       SWARM_CORS_ALLOW_ANY_HTTP: ${SWARM_CORS_ALLOW_ANY_HTTP:-true}
+      SWARM_IOT_COMPAT_LEGACY: ${SWARM_IOT_COMPAT_LEGACY:-false}
       MQTT_ENABLED: ${MQTT_ENABLED:-false}
-      MQTT_BROKER: tcp://mosquitto:1883
+      MQTT_BROKER: ${MQTT_BROKER:-tcp://mosquitto:1883}
+      MQTT_CLIENT_ID: ${MQTT_CLIENT_ID:-swarm-backend}
+      MQTT_USER: ${MQTT_USER:-swarm-backend}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-changeme-mqtt-backend}
+      MQTT_SWARM_TOPIC: ${MQTT_SWARM_TOPIC:-swarm/v1/+/+/+/telemetry}
+      MQTT_TRUST_BROKER_ACLS: ${MQTT_TRUST_BROKER_ACLS:-true}
       SWARM_BOOTSTRAP_ADMIN_EMAIL: ${SWARM_BOOTSTRAP_ADMIN_EMAIL:-}
       SWARM_BOOTSTRAP_ADMIN_PASSWORD: ${SWARM_BOOTSTRAP_ADMIN_PASSWORD:-}
       SWARM_SEED_DEMO_ACCOUNTS: ${SWARM_SEED_DEMO_ACCOUNTS:-false}

@@ -15,6 +15,7 @@ import com.biopower.model.enums.NodeStatus;
 import com.biopower.model.enums.SensorType;
 import com.biopower.repository.DeviceChannelRepository;
 import com.biopower.repository.DeviceRepository;
+import com.biopower.repository.PlantRepository;
 import com.biopower.repository.SensorMessageRepository;
 import com.biopower.repository.IngestRejectedRepository;
 import com.biopower.repository.SensorNodeRepository;
@@ -36,10 +37,17 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.anyLong;
+import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class TelemetryIngestServiceTest {
@@ -47,6 +55,7 @@ class TelemetryIngestServiceTest {
     @Mock DeviceRepository deviceRepository;
     @Mock DeviceChannelRepository deviceChannelRepository;
     @Mock SensorNodeRepository sensorNodeRepository;
+    @Mock PlantRepository plantRepository;
     @Mock SensorReadingRepository sensorReadingRepository;
     @Mock SensorMessageRepository sensorMessageRepository;
     @Mock IngestRejectedRepository ingestRejectedRepository;
@@ -128,6 +137,7 @@ class TelemetryIngestServiceTest {
         assertFalse(result.isDuplicate());
         assertEquals(1, result.getReadings().size());
         assertEquals(38.5, result.getReadings().get(0).getValue());
+        assertEquals(999L, result.getReadings().get(0).getId());
         verify(alertService).evaluateReading(any());
         verify(aiHealthService).analyzePlant(7L);
         verify(sensorMessageRepository).save(any());
@@ -169,6 +179,8 @@ class TelemetryIngestServiceTest {
                 .build());
 
         assertEquals(2, result.getReadings().size());
+        assertEquals(1L, result.getReadings().get(0).getId());
+        assertEquals(2L, result.getReadings().get(1).getId());
         verify(sensorReadingRepository, times(2)).save(any());
         verify(sensorMessageRepository).save(any());
     }
@@ -217,21 +229,147 @@ class TelemetryIngestServiceTest {
     }
 
     @Test
-    void unknownChannelIsRejected() {
+    void unknownChannelIsDiscoveredAutomatically() {
         SecurityContextHolder.getContext().setAuthentication(principal());
         when(deviceRepository.findById(11L)).thenReturn(Optional.of(device));
         when(sensorMessageRepository.existsByMessageId(anyString())).thenReturn(false);
         when(deviceChannelRepository.findByDeviceIdAndChannelId(11L, "99")).thenReturn(Optional.empty());
+        when(plantRepository.findById(7L)).thenReturn(Optional.of(plant));
+        when(sensorNodeRepository.save(any(SensorNode.class))).thenAnswer(inv -> {
+            SensorNode created = inv.getArgument(0);
+            if (created.getNodeId() == null) {
+                created.setNodeId(202L);
+            }
+            return created;
+        });
+        when(deviceChannelRepository.save(any(DeviceChannel.class))).thenAnswer(inv -> {
+            DeviceChannel created = inv.getArgument(0);
+            if (created.getId() == null) {
+                created.setId(9L);
+            }
+            return created;
+        });
+        when(sensorNodeRepository.findById(202L)).thenReturn(Optional.of(SensorNode.builder()
+                .nodeId(202L)
+                .plant(plant)
+                .nodeName("GENERIC-99")
+                .sensorType(SensorType.GENERIC)
+                .status(NodeStatus.ACTIVE)
+                .build()));
+        when(sensorReadingRepository.save(any())).thenAnswer(inv -> {
+            SensorReading r = inv.getArgument(0);
+            r.setId(7L);
+            return r;
+        });
 
-        assertThrows(BadRequestException.class, () -> service.ingest(IngestEnvelope.builder()
+        IngestResult result = service.ingest(IngestEnvelope.builder()
                 .transport(IngestTransport.MQTT)
                 .plantId(7L)
                 .deviceUid("SWARM-HUB-ABCD")
-                .messageId("unknown-ch")
-                .readings(List.of(IngestPoint.builder().channelId("99").value(1.0).build()))
+                .messageId("discover-ch")
+                .readings(List.of(IngestPoint.builder().channelId("99").value(12.0).name("Vibration A").unit("mm/s").build()))
+                .build());
+
+        assertEquals(1, result.getReadings().size());
+        verify(deviceChannelRepository, atLeastOnce()).save(any(DeviceChannel.class));
+        verify(sensorNodeRepository, atLeastOnce()).save(any(SensorNode.class));
+        verify(sensorReadingRepository, times(1)).save(any());
+    }
+
+    @Test
+    void multipleUnseenChannelsCreateSeparateNodes() {
+        SecurityContextHolder.getContext().setAuthentication(principal());
+        when(deviceRepository.findById(11L)).thenReturn(Optional.of(device));
+        when(sensorMessageRepository.existsByMessageId("multi-new")).thenReturn(false);
+        when(deviceChannelRepository.findByDeviceIdAndChannelId(11L, "n1")).thenReturn(Optional.empty());
+        when(deviceChannelRepository.findByDeviceIdAndChannelId(11L, "n2")).thenReturn(Optional.empty());
+        when(plantRepository.findById(7L)).thenReturn(Optional.of(plant));
+        AtomicLong nodeIds = new AtomicLong(300);
+        when(sensorNodeRepository.save(any(SensorNode.class))).thenAnswer(inv -> {
+            SensorNode created = inv.getArgument(0);
+            if (created.getNodeId() == null) {
+                created.setNodeId(nodeIds.getAndIncrement());
+            }
+            return created;
+        });
+        when(deviceChannelRepository.save(any(DeviceChannel.class))).thenAnswer(inv -> {
+            DeviceChannel created = inv.getArgument(0);
+            if (created.getId() == null) {
+                created.setId(created.getChannelId().equals("n1") ? 21L : 22L);
+            }
+            return created;
+        });
+        when(sensorNodeRepository.findById(anyLong())).thenAnswer(inv -> {
+            Long id = inv.getArgument(0);
+            return Optional.of(SensorNode.builder()
+                    .nodeId(id)
+                    .plant(plant)
+                    .nodeName("GENERIC-" + id)
+                    .sensorType(SensorType.GENERIC)
+                    .status(NodeStatus.ACTIVE)
+                    .build());
+        });
+        when(sensorReadingRepository.save(any())).thenAnswer(inv -> {
+            SensorReading r = inv.getArgument(0);
+            r.setId(r.getChannelId().equals("n1") ? 31L : 32L);
+            return r;
+        });
+
+        IngestResult result = service.ingest(IngestEnvelope.builder()
+                .transport(IngestTransport.MQTT)
+                .plantId(7L)
+                .deviceUid("SWARM-HUB-ABCD")
+                .messageId("multi-new")
+                .readings(List.of(
+                        IngestPoint.builder().channelId("n1").value(1.0).build(),
+                        IngestPoint.builder().channelId("n2").value(2.0).build()))
+                .build());
+
+        assertEquals(2, result.getReadings().size());
+        verify(sensorNodeRepository, atLeast(2)).save(any(SensorNode.class));
+        verify(deviceChannelRepository, times(2)).save(any(DeviceChannel.class));
+        verify(sensorReadingRepository, times(2)).save(any());
+    }
+
+    @Test
+    void subsequentTelemetryDoesNotDuplicateDiscoveredChannel() {
+        SecurityContextHolder.getContext().setAuthentication(principal());
+        when(deviceRepository.findById(11L)).thenReturn(Optional.of(device));
+        when(sensorMessageRepository.existsByMessageId("second")).thenReturn(false);
+        when(deviceChannelRepository.findByDeviceIdAndChannelId(11L, "1")).thenReturn(Optional.of(channel));
+        when(sensorNodeRepository.findById(101L)).thenReturn(Optional.of(node));
+        when(sensorReadingRepository.save(any())).thenAnswer(inv -> {
+            SensorReading r = inv.getArgument(0);
+            r.setId(8L);
+            return r;
+        });
+
+        service.ingest(IngestEnvelope.builder()
+                .transport(IngestTransport.MQTT)
+                .plantId(7L)
+                .deviceUid("SWARM-HUB-ABCD")
+                .messageId("second")
+                .readings(List.of(IngestPoint.builder().channelId("1").value(22.0).build()))
+                .build());
+
+        verify(deviceChannelRepository, never()).save(any());
+        verify(sensorReadingRepository, times(1)).save(any());
+    }
+
+    @Test
+    void suspendedDeviceTelemetryIsRejected() {
+        device.setLifecycle(DeviceLifecycle.SUSPENDED);
+        SecurityContextHolder.getContext().setAuthentication(principal());
+        when(deviceRepository.findById(11L)).thenReturn(Optional.of(device));
+
+        assertThrows(UnauthorizedException.class, () -> service.ingest(IngestEnvelope.builder()
+                .transport(IngestTransport.MQTT)
+                .plantId(7L)
+                .deviceUid("SWARM-HUB-ABCD")
+                .readings(List.of(IngestPoint.builder().channelId("1").value(1.0).build()))
                 .build()));
-        verify(ingestRejectedRepository).save(any());
         verify(sensorReadingRepository, never()).save(any());
+        verify(ingestRejectedRepository).save(any());
     }
 
     @Test

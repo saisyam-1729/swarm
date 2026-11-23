@@ -2,9 +2,9 @@
 package com.biopower.security;
 
 import com.biopower.model.entity.Device;
-import com.biopower.model.enums.DeviceLifecycle;
 import com.biopower.repository.DeviceRepository;
 import com.biopower.util.DeviceSecretHasher;
+import com.biopower.util.DeviceStatuses;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -72,8 +72,8 @@ public class DeviceAuthenticationFilter extends OncePerRequestFilter {
                 return;
             }
             Device device = deviceOpt.get();
-            if (device.getLifecycle() == DeviceLifecycle.RETIRED) {
-                writeUnauthorized(response, "Device retired");
+            if (!DeviceStatuses.canPublish(device)) {
+                writeUnauthorized(response, "Device is " + device.getLifecycle());
                 return;
             }
             if (!DeviceSecretHasher.matches(secret.trim(), device.getSecretHash())) {

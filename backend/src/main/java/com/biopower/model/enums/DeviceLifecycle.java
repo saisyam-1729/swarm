@@ -6,5 +6,6 @@ public enum DeviceLifecycle {
     COMMISSIONING,
     ACTIVE,
     MAINTENANCE,
+    SUSPENDED,
     RETIRED
 }

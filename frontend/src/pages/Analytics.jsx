@@ -1,17 +1,19 @@
-// PURPOSE: SWARM plant-app page: Analytics.
+// PURPOSE: Historical analytics for whatever sensors the plant actually has.
 import { useState, useEffect, useMemo } from 'react';
 import {
-  Box, Typography, Card, CardContent, FormControl, InputLabel, Select, MenuItem,
-  ToggleButtonGroup, ToggleButton, CircularProgress, Grid,
+  Box, Card, CardContent, FormControl, InputLabel, Select, MenuItem,
+  ToggleButtonGroup, ToggleButton, Grid,
 } from '@mui/material';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { plantAPI, dashboardAPI, sensorAPI } from '../services/api';
 import { getSensorTypesForPlant } from '../utils/constants';
 import useSensorCatalog from '../utils/useSensorCatalog';
 import EmptyState from '../components/common/EmptyState';
+import PageHeader from '../components/common/PageHeader';
+import ErrorState from '../components/common/ErrorState';
+import LoadingSkeleton from '../components/common/LoadingSkeleton';
+import TelemetryChart from '../components/telemetry/TelemetryChart';
 import { subHours, subDays, subWeeks, subMonths, format } from 'date-fns';
 
-const chartColors = ['#0066CC', '#00A86B', '#DC3545', '#FFC107', '#6f42c1'];
 const ANALYTICS_POLL_MS = 15000;
 
 export default function Analytics({ fixedPlantId, embedded = false, hidePlantSelector = false }) {
@@ -23,7 +25,7 @@ export default function Analytics({ fixedPlantId, embedded = false, hidePlantSel
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [plantSensorTypes, setPlantSensorTypes] = useState([]);
-  const { types, labels } = useSensorCatalog();
+  const { types, labels, units } = useSensorCatalog();
 
   useEffect(() => {
     if (fixedPlantId) {
@@ -47,8 +49,8 @@ export default function Analytics({ fixedPlantId, embedded = false, hidePlantSel
     sensorAPI.getByPlant(selectedPlant)
       .then(({ data }) => {
         if (cancelled) return;
-        const types = [...new Set((data.data || []).map((n) => n.sensorType).filter(Boolean))];
-        setPlantSensorTypes(types);
+        const discovered = [...new Set((data.data || []).map((n) => n.sensorType).filter(Boolean))];
+        setPlantSensorTypes(discovered);
       })
       .catch(() => {
         if (!cancelled) setPlantSensorTypes([]);
@@ -109,7 +111,11 @@ export default function Analytics({ fixedPlantId, embedded = false, hidePlantSel
 
   return (
     <Box>
-      {!embedded && <Typography variant="h5" fontWeight={700} sx={{ mb: 3 }}>Historical Analytics</Typography>}
+      <PageHeader
+        hidden={embedded}
+        title="Historical analytics"
+        subtitle="Trends use actual ingested readings. The sensor list is whatever the plant currently reports."
+      />
 
       <Grid container spacing={2} sx={{ mb: 3 }}>
         {!hidePlantSelector && (
@@ -142,33 +148,19 @@ export default function Analytics({ fixedPlantId, embedded = false, hidePlantSel
 
       <Card>
         <CardContent>
-          <Typography variant="h6" sx={{ mb: 2 }}>{labels[sensorType] || sensorType || 'Sensor'} Trend</Typography>
           {!selectedPlant ? (
-            <EmptyState
-              title="No plant selected"
-              description="Assign a plant to view sensor trends."
-            />
-          ) : loading ? <CircularProgress /> : loadError ? (
-            <EmptyState
-              title="Analytics unavailable"
-              description={loadError}
-            />
-          ) : chartData.length === 0 ? (
-            <EmptyState
-              title="No readings in this range"
-              description="Trends appear after devices ingest telemetry for the selected sensor."
-            />
+            <EmptyState title="No plant selected" description="Assign a plant to view sensor trends." />
+          ) : loading ? (
+            <LoadingSkeleton variant="table" count={6} />
+          ) : loadError ? (
+            <ErrorState description={loadError} />
           ) : (
-            <ResponsiveContainer width="100%" height={400}>
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="time" tick={{ fontSize: 12 }} />
-                <YAxis />
-                <Tooltip />
-                <Legend />
-                <Line type="monotone" dataKey="value" stroke={chartColors[0]} strokeWidth={2} dot={false} name={labels[sensorType] || sensorType} />
-              </LineChart>
-            </ResponsiveContainer>
+            <TelemetryChart
+              data={chartData}
+              name={labels[sensorType] || sensorType || 'Sensor'}
+              unit={chartData[0]?.unit || units[sensorType]}
+              height={400}
+            />
           )}
         </CardContent>
       </Card>

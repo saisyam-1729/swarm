@@ -2,6 +2,7 @@
 package com.biopower.config;
 
 import com.biopower.mqtt.MqttConnectionHealth;
+import com.biopower.mqtt.MqttIngestRetry;
 import com.biopower.mqtt.MqttTelemetryHandler;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -54,6 +55,7 @@ public class MqttConfig {
 
     private final MqttTelemetryHandler mqttTelemetryHandler;
     private final MqttConnectionHealth mqttConnectionHealth;
+    private final MqttIngestRetry mqttIngestRetry;
 
     @Bean
     public MqttPahoClientFactory mqttClientFactory() {
@@ -99,9 +101,11 @@ public class MqttConfig {
             try {
                 mqttConnectionHealth.markMessageReceived();
                 String payload = message.getPayload() == null ? "" : message.getPayload().toString();
-                // Server-side subscription uses broker credentials; device auth is
-                // enforced from payload/topic via DevicePrincipal resolution in the handler.
-                mqttTelemetryHandler.handle(topic, payload, null, null);
+                // Subscriber path: publisher username is not visible. Device identity is
+                // taken from the topic and checked against the registry. Broker ACLs must
+                // restrict swarm/v1/{tenant}/{plant}/{deviceUid}/telemetry to that UID.
+                // QoS 1 can deliver duplicates; TelemetryIngestService dedupes by messageId.
+                mqttIngestRetry.run(() -> mqttTelemetryHandler.handle(topic, payload, null, null));
             } catch (Exception e) {
                 mqttConnectionHealth.markFailure(e.getMessage());
                 log.warn("MQTT ingest failed topic={}: {}", topic, e.getMessage());

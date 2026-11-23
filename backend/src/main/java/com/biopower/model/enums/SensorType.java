@@ -14,5 +14,7 @@ public enum SensorType {
     LIQUID_LEVEL,
     PRESSURE_TRANSMITTER,
     FLOW_TRANSMITTER,
-    TEMPERATURE_TRANSMITTER
+    TEMPERATURE_TRANSMITTER,
+    /** Fallback when telemetry reports an unknown measurement. */
+    GENERIC
 }

@@ -2,6 +2,8 @@
 package com.biopower.service;
 
 import com.biopower.dto.request.DeviceChannelRequest;
+import com.biopower.dto.request.DeviceLifecycleRequest;
+import com.biopower.dto.request.DeviceReassignRequest;
 import com.biopower.dto.request.DeviceRegisterRequest;
 import com.biopower.dto.response.FieldDeviceChannelResponse;
 import com.biopower.dto.response.HardwareProvisioningResponse;
@@ -15,6 +17,7 @@ import com.biopower.model.enums.DeviceKind;
 import com.biopower.model.enums.DeviceLifecycle;
 import com.biopower.model.enums.SensorType;
 import com.biopower.mqtt.MqttConnectionHealth;
+import com.biopower.repository.DeviceAuditEventRepository;
 import com.biopower.repository.DeviceChannelRepository;
 import com.biopower.repository.DeviceRepository;
 import com.biopower.repository.IngestRejectedRepository;
@@ -50,6 +53,7 @@ class DeviceProvisioningServiceTest {
     @Mock FieldDeviceQueryService fieldDeviceQueryService;
     @Mock MqttConnectionHealth mqttConnectionHealth;
     @Mock IngestRejectedRepository ingestRejectedRepository;
+    @Mock DeviceAuditEventRepository deviceAuditEventRepository;
 
     @InjectMocks
     DeviceProvisioningService service;
@@ -65,6 +69,7 @@ class DeviceProvisioningServiceTest {
         ReflectionTestUtils.setField(service, "mqttInternalHost", "mosquitto");
         ReflectionTestUtils.setField(service, "mqttInternalPort", 1883);
         ReflectionTestUtils.setField(service, "legacyTopic", "biopower/sensors/#");
+        ReflectionTestUtils.setField(service, "sensorTimeoutMinutes", 10);
         tenantId = UUID.fromString("11111111-1111-4111-8111-111111111111");
         tenant = Company.builder().id(tenantId).name("Tenant A").build();
         plant = Plant.builder().plantId(7L).plantName("Plant A1").company(tenant).build();
@@ -165,6 +170,106 @@ class DeviceProvisioningServiceTest {
         assertFalse(response.isSecretShownOnce());
         assertEquals(DeviceKind.MQTT_GATEWAY, response.getDeviceKind());
         assertEquals(DeviceLifecycle.COMMISSIONING, response.getLifecycle());
+        assertEquals("AWAITING_TELEMETRY", response.getStatus());
+        assertEquals("PROVISIONED", response.getProvisioningStatus());
+    }
+
+    @Test
+    void reassignMovesDeviceAndUnlinksLiveChannelsWithoutMovingHistory() {
+        Device device = savedDevice();
+        Company other = Company.builder()
+                .id(UUID.fromString("22222222-2222-4222-8222-222222222222"))
+                .name("Tenant B")
+                .build();
+        Plant destination = Plant.builder().plantId(9L).plantName("Plant B").company(other).build();
+        DeviceChannel live = DeviceChannel.builder()
+                .id(1L)
+                .deviceId(11L)
+                .channelId("1")
+                .sensorNodeId(101L)
+                .measurementType(SensorType.TEMPERATURE)
+                .active(true)
+                .build();
+        when(deviceRepository.findById(11L)).thenReturn(Optional.of(device));
+        when(plantRepository.findById(9L)).thenReturn(Optional.of(destination));
+        when(deviceChannelRepository.findByDeviceIdOrderByChannelIdAsc(11L)).thenReturn(List.of(live));
+        when(fieldDeviceQueryService.describe(any())).thenAnswer(inv -> null);
+
+        DeviceReassignRequest request = new DeviceReassignRequest();
+        request.setPlantId(9L);
+        service.reassign(11L, request);
+
+        assertEquals(other.getId(), device.getTenantId());
+        assertEquals(9L, device.getPlantId());
+        assertNull(live.getSensorNodeId());
+        verify(deviceAuditEventRepository).save(any());
+    }
+
+    @Test
+    void registerGeneratesUniqueUidWhenBlank() {
+        when(plantRepository.findById(7L)).thenReturn(Optional.of(plant));
+        when(deviceRegistryService.allocateDeviceUid(null)).thenReturn("SWARM-DEV-UNIQUE");
+        AtomicLong ids = new AtomicLong(11);
+        when(deviceRepository.save(any(Device.class))).thenAnswer(inv -> {
+            Device device = inv.getArgument(0);
+            if (device.getId() == null) {
+                device.setId(ids.getAndIncrement());
+            }
+            return device;
+        });
+        when(deviceRepository.findById(11L)).thenAnswer(inv -> Optional.of(Device.builder()
+                .id(11L)
+                .tenantId(tenantId)
+                .plantId(7L)
+                .deviceUid("SWARM-DEV-UNIQUE")
+                .deviceName("SWARM-DEV-UNIQUE")
+                .deviceKind(DeviceKind.MQTT_GATEWAY)
+                .lifecycle(DeviceLifecycle.COMMISSIONING)
+                .secretHash("hashed")
+                .legacyCompat(false)
+                .configVersion(1)
+                .build()));
+        when(deviceChannelRepository.findByDeviceIdOrderByChannelIdAsc(11L)).thenReturn(List.of());
+
+        DeviceRegisterRequest request = new DeviceRegisterRequest();
+        request.setPlantId(7L);
+        request.setTenantId(tenantId);
+
+        HardwareProvisioningResponse response = service.register(request);
+
+        assertEquals("SWARM-DEV-UNIQUE", response.getDeviceUid());
+        assertEquals(tenantId, response.getTenantId());
+        assertEquals(7L, response.getPlantId());
+        assertNotNull(response.getDeviceSecret());
+        assertTrue(response.getDeviceSecret().startsWith("swd_"));
+        verify(deviceAuditEventRepository).save(any());
+    }
+
+    @Test
+    void revokeSecretClearsCredentials() {
+        Device device = savedDevice();
+        when(deviceRepository.findById(11L)).thenReturn(Optional.of(device));
+        when(plantRepository.findById(7L)).thenReturn(Optional.of(plant));
+        when(deviceChannelRepository.findByDeviceIdOrderByChannelIdAsc(11L)).thenReturn(List.of());
+
+        HardwareProvisioningResponse response = service.revokeSecret(11L);
+
+        assertNull(device.getSecretHash());
+        assertFalse(device.isLegacyCompat());
+        assertNull(response.getDeviceSecret());
+        verify(deviceAuditEventRepository).save(any());
+    }
+
+    @Test
+    void suspendBlocksPublishingLifecycle() {
+        Device device = savedDevice();
+        when(deviceRepository.findById(11L)).thenReturn(Optional.of(device));
+        when(fieldDeviceQueryService.describe(any())).thenReturn(null);
+        DeviceLifecycleRequest request = new DeviceLifecycleRequest();
+        request.setLifecycle(DeviceLifecycle.SUSPENDED);
+        service.setLifecycle(11L, request);
+        assertEquals(DeviceLifecycle.SUSPENDED, device.getLifecycle());
+        verify(deviceAuditEventRepository).save(any());
     }
 
     private Device savedDevice() {

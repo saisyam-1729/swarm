@@ -1,0 +1,5 @@
+# PURPOSE: Example Mosquitto password file placeholder.
+# Do not commit real secrets. Generate with:
+#   mosquitto_passwd -c docker/mosquitto/passwd swarm-backend
+#   mosquitto_passwd docker/mosquitto/passwd SWARM-HUB-YOURDEVICE
+# Then copy to docker/mosquitto/passwd (gitignored) or mount in Compose.

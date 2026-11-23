@@ -14,5 +14,9 @@ public class IngestPoint {
     private Long nodeId;
     /** Compat: must match registered node/channel measurement when provided. */
     private SensorType sensorType;
+    /** Optional engineering unit supplied by the publisher. */
+    private String unit;
+    /** Optional instrument/channel name supplied by the publisher. */
+    private String name;
     private Double value;
 }

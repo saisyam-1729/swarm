@@ -5,6 +5,8 @@ import com.biopower.dto.request.ApproveUserRequest;
 import com.biopower.dto.request.AssignPlantsRequest;
 import com.biopower.dto.request.CompanyRequest;
 import com.biopower.dto.request.DeviceChannelRequest;
+import com.biopower.dto.request.DeviceLifecycleRequest;
+import com.biopower.dto.request.DeviceReassignRequest;
 import com.biopower.dto.request.DeviceRegisterRequest;
 import com.biopower.dto.request.HmiEnabledRequest;
 import com.biopower.dto.request.PlantRequest;
@@ -21,6 +23,7 @@ import com.biopower.dto.response.FieldDeviceResponse;
 import com.biopower.dto.response.HardwareProvisioningResponse;
 import com.biopower.dto.response.PlantResponse;
 import com.biopower.dto.response.UserResponse;
+import com.biopower.model.entity.DeviceAuditEvent;
 import com.biopower.model.enums.CompanyStatus;
 import com.biopower.service.ControlCenterService;
 import com.biopower.service.DeviceProvisioningService;
@@ -188,6 +191,34 @@ public class ControlCenterController {
         return ResponseEntity.ok(ApiResponse.success(
                 "Device secret rotated. Store it now; it will not be shown again.",
                 deviceProvisioningService.rotateSecret(id)));
+    }
+
+    @PostMapping("/devices/{id}/revoke-secret")
+    public ResponseEntity<ApiResponse<HardwareProvisioningResponse>> revokeSecret(@PathVariable Long id) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Device credentials revoked. The device cannot publish until a new secret is issued.",
+                deviceProvisioningService.revokeSecret(id)));
+    }
+
+    @PatchMapping("/devices/{id}/assignment")
+    public ResponseEntity<ApiResponse<FieldDeviceResponse>> reassignDevice(
+            @PathVariable Long id, @Valid @RequestBody DeviceReassignRequest request) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Device reassigned. Historical telemetry remains on the previous plant.",
+                deviceProvisioningService.reassign(id, request)));
+    }
+
+    @PatchMapping("/devices/{id}/lifecycle")
+    public ResponseEntity<ApiResponse<FieldDeviceResponse>> setDeviceLifecycle(
+            @PathVariable Long id, @Valid @RequestBody DeviceLifecycleRequest request) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Device lifecycle updated",
+                deviceProvisioningService.setLifecycle(id, request)));
+    }
+
+    @GetMapping("/devices/{id}/audit")
+    public ResponseEntity<ApiResponse<List<DeviceAuditEvent>>> deviceAudit(@PathVariable Long id) {
+        return ResponseEntity.ok(ApiResponse.success(deviceProvisioningService.listAudit(id)));
     }
 
     @PutMapping("/devices/{id}/channels")

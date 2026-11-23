@@ -27,6 +27,8 @@ public class HardwareProvisioningResponse {
     private String deviceName;
     private DeviceKind deviceKind;
     private DeviceLifecycle lifecycle;
+    private String status;
+    private String provisioningStatus;
     private boolean credentialsIssued;
     private boolean secretShownOnce;
     /** One-time plaintext. Null on later GET. */

@@ -14,15 +14,14 @@ import com.biopower.repository.PlantRepository;
 import com.biopower.repository.SensorNodeRepository;
 import com.biopower.repository.SensorReadingRepository;
 import com.biopower.security.UserPrincipal;
+import com.biopower.util.DeviceStatuses;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 @Service
@@ -44,18 +43,12 @@ public class FieldDeviceQueryService {
         if (plantId != null) {
             plantAccessService.assertCanAccessPlant(principal, plantId);
             return deviceRepository.findByPlantId(plantId).stream()
+                    .filter(d -> plantAccessService.canAccessDevice(principal, d))
                     .map(this::toResponse)
                     .toList();
         }
         return deviceRepository.findAll().stream()
-                .filter(d -> {
-                    try {
-                        plantAccessService.assertCanAccessPlant(principal, d.getPlantId());
-                        return true;
-                    } catch (Exception ex) {
-                        return false;
-                    }
-                })
+                .filter(d -> plantAccessService.canAccessDevice(principal, d))
                 .map(this::toResponse)
                 .toList();
     }
@@ -64,7 +57,7 @@ public class FieldDeviceQueryService {
     public FieldDeviceResponse getDevice(Long id, UserPrincipal principal) {
         Device device = deviceRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Device not found: " + id));
-        plantAccessService.assertCanAccessPlant(principal, device.getPlantId());
+        plantAccessService.assertCanAccessDevice(principal, device);
         return toResponse(device);
     }
 
@@ -79,7 +72,8 @@ public class FieldDeviceQueryService {
     private FieldDeviceResponse toResponse(Device device) {
         Plant plant = plantRepository.findById(device.getPlantId()).orElse(null);
         List<DeviceChannel> channels = deviceChannelRepository.findByDeviceIdOrderByChannelIdAsc(device.getId());
-        String connection = connectionStatus(device);
+        long nodeCount = channels.stream().map(DeviceChannel::getSensorNodeId).filter(id -> id != null).distinct().count();
+        String status = DeviceStatuses.operationalStatus(device, sensorTimeoutMinutes);
         return FieldDeviceResponse.builder()
                 .id(device.getId())
                 .deviceUid(device.getDeviceUid())
@@ -91,15 +85,19 @@ public class FieldDeviceQueryService {
                 .deviceName(device.getDeviceName())
                 .deviceKind(device.getDeviceKind())
                 .lifecycle(device.getLifecycle())
+                .status(status)
+                .provisioningStatus(DeviceStatuses.provisioningStatus(device))
                 .legacyCompat(device.isLegacyCompat())
-                .hasCredentials(device.getSecretHash() != null && !device.getSecretHash().isBlank())
+                .hasCredentials(DeviceStatuses.credentialsIssued(device))
+                .nodeCount((int) nodeCount)
+                .sensorCount(channels.size())
                 .lastSeenAt(device.getLastSeenAt() == null ? null
                         : LocalDateTime.ofInstant(device.getLastSeenAt(), ZoneId.systemDefault()))
                 .lastIp(device.getLastIp())
                 .lastRssi(device.getLastRssi())
                 .firmwareVersion(device.getFirmwareVersion())
                 .configVersion(device.getConfigVersion())
-                .connectionStatus(connection)
+                .connectionStatus(status)
                 .channels(channels.stream().map(this::toChannel).toList())
                 .build();
     }
@@ -146,13 +144,4 @@ public class FieldDeviceQueryService {
                 .build();
     }
 
-    private String connectionStatus(Device device) {
-        if (device.getLastSeenAt() == null) {
-            return "Not Connected";
-        }
-        if (device.getLastSeenAt().isBefore(Instant.now().minus(sensorTimeoutMinutes, ChronoUnit.MINUTES))) {
-            return "Offline";
-        }
-        return "Connected";
-    }
 }

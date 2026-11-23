@@ -1,19 +1,31 @@
-// PURPOSE: SWARM plant-app page: Sensors.
-import { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+// PURPOSE: Dynamic field-device inventory: hubs, discovered sensors, and pairing.
+import { useState, useEffect, useMemo } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Box, Typography, Button, Card, Table, TableBody, TableCell, TableContainer,
-  TableHead, TableRow, Chip, IconButton, Dialog, DialogTitle, DialogContent,
+  TableHead, TableRow, IconButton, Dialog, DialogTitle, DialogContent,
   DialogActions, TextField, MenuItem, Grid, FormControl, InputLabel, Select,
-  CircularProgress, Alert, Tabs, Tab,
+  Alert, Tabs, Tab, CardContent,
 } from '@mui/material';
-import { Add, Edit, PowerSettingsNew, Delete, CellTower } from '@mui/icons-material';
+import { Edit, PowerSettingsNew, Delete } from '@mui/icons-material';
 import { sensorAPI, plantAPI, fieldDeviceAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { getSensorTypesForPlant } from '../utils/constants';
 import useSensorCatalog from '../utils/useSensorCatalog';
-import { pageHeaderRow, pageTitleSx, responsiveSelect } from '../utils/responsive';
+import { responsiveSelect } from '../utils/responsive';
+import useCollection from '../utils/useCollection';
 import ConnectDevice from './ConnectDevice';
+import PageHeader from '../components/common/PageHeader';
+import EmptyState from '../components/common/EmptyState';
+import ErrorState from '../components/common/ErrorState';
+import LoadingSkeleton from '../components/common/LoadingSkeleton';
+import SearchAndFilter from '../components/common/SearchAndFilter';
+import CollectionPager from '../components/common/CollectionPager';
+import StatusBadge from '../components/common/StatusBadge';
+import SensorGrid from '../components/telemetry/SensorGrid';
+import SensorTable from '../components/telemetry/SensorTable';
+import DeviceCard from '../components/telemetry/DeviceCard';
+import { formatReading, readingFreshness } from '../utils/sensorPresentation';
 
 const emptyForm = {
   plantId: '',
@@ -22,26 +34,17 @@ const emptyForm = {
   status: 'ACTIVE',
 };
 
-function connectionLabel(node) {
-  if (!node.lastReadingAt) return 'No Data';
-  const ageMs = Date.now() - new Date(node.lastReadingAt).getTime();
-  if (Number.isNaN(ageMs)) return 'Unknown';
-  if (ageMs > 10 * 60 * 1000) return 'Stale';
-  return 'Live';
-}
-
-function instrumentSource(node) {
-  return node.deviceChipId ? 'SWARM Hub' : 'Instrument';
-}
-
 function tabFromParams(searchParams) {
   const t = searchParams.get('tab');
-  if (t === 'pair' || t === 'hubs') return t;
-  return 'inventory';
+  if (t === 'pair' || t === 'inventory') return t;
+  return 'hubs';
 }
 
+const PAGE_SIZE = 24;
+
 export default function Sensors({ fixedPlantId, embedded = false, hidePlantSelector = false }) {
-  const { isSuperAdmin, isOperator } = useAuth();
+  const { isSuperAdmin } = useAuth();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = tabFromParams(searchParams);
 
@@ -54,10 +57,13 @@ export default function Sensors({ fixedPlantId, embedded = false, hidePlantSelec
   const [form, setForm] = useState({ ...emptyForm, plantId: fixedPlantId || '' });
   const [filterPlant, setFilterPlant] = useState(fixedPlantId || '');
   const [loadError, setLoadError] = useState('');
+  const [view, setView] = useState('grid');
+  const [typeFilter, setTypeFilter] = useState('ALL');
+  const [statusFilter, setStatusFilter] = useState('ALL');
 
   const setTab = (next) => {
     const params = new URLSearchParams(searchParams);
-    if (next === 'pair' || next === 'hubs') params.set('tab', next);
+    if (next === 'pair' || next === 'inventory') params.set('tab', next);
     else params.delete('tab');
     setSearchParams(params, { replace: true });
   };
@@ -87,13 +93,37 @@ export default function Sensors({ fixedPlantId, embedded = false, hidePlantSelec
     return () => clearInterval(interval);
   }, [fixedPlantId, filterPlant]);
 
-  const { types, labels } = useSensorCatalog();
-  const filtered = filterPlant ? nodes.filter((n) => n.plantId === Number(filterPlant)) : nodes;
+  const { types, labels, units } = useSensorCatalog();
+  const plantFiltered = filterPlant ? nodes.filter((n) => n.plantId === Number(filterPlant)) : nodes;
   const selectedPlant = plants.find((p) => p.plantId === Number(form.plantId));
-  const installedTypes = [...new Set(filtered.map((n) => n.sensorType).filter(Boolean))];
+  const installedTypes = [...new Set(plantFiltered.map((n) => n.sensorType).filter(Boolean))];
   const sensorTypeOptions = installedTypes.length
     ? [...new Set([...getSensorTypesForPlant(selectedPlant, types), ...installedTypes])]
     : getSensorTypesForPlant(selectedPlant, types);
+
+  const statusAware = useMemo(() => {
+    if (statusFilter === 'ALL') return plantFiltered;
+    return plantFiltered.filter((n) => {
+      const freshness = readingFreshness(n.lastReadingAt);
+      if (statusFilter === 'LIVE') return freshness === 'LIVE';
+      if (statusFilter === 'STALE') return freshness === 'STALE';
+      if (statusFilter === 'NO_DATA') return freshness === 'NO_DATA';
+      return String(n.status) === statusFilter;
+    });
+  }, [plantFiltered, statusFilter]);
+
+  const collection = useCollection(statusAware, {
+    searchKeys: ['nodeName', 'sensorType', 'deviceChipId', 'plantName', 'deviceIp'],
+    initialSortKey: 'nodeName',
+    pageSize: PAGE_SIZE,
+    filters: typeFilter === 'ALL' ? {} : { sensorType: typeFilter },
+  });
+
+  const hubCollection = useCollection(hubs, {
+    searchKeys: ['deviceName', 'deviceUid', 'chipId', 'plantName', 'status', 'lifecycle'],
+    initialSortKey: 'deviceName',
+    pageSize: PAGE_SIZE,
+  });
 
   const handleSave = async () => {
     const payload = {
@@ -119,128 +149,141 @@ export default function Sensors({ fixedPlantId, embedded = false, hidePlantSelec
     loadData();
   };
 
-  const openAddInstrument = () => {
-    setEditId(null);
-    setForm({ ...emptyForm, plantId: filterPlant || fixedPlantId || '' });
-    setDialogOpen(true);
-  };
-
-  if (loading) return <CircularProgress />;
+  if (loading) return <LoadingSkeleton variant="cards" count={8} />;
 
   return (
     <Box>
-      <Box sx={pageHeaderRow}>
-        <Box sx={{ minWidth: 0 }}>
-          {!embedded && (
-            <>
-              <Typography variant="h5" sx={pageTitleSx}>Field Devices</Typography>
-              <Typography variant="body2" color="text.secondary">
-                Commission SWARM sensor hubs on site, then keep the plant’s instrument list
-                (temperature, methane, pH, transmitters) in one inventory.
-              </Typography>
-            </>
-          )}
-        </Box>
-        <Box sx={{ display: 'flex', gap: 2, flexDirection: { xs: 'column', sm: 'row' }, width: { xs: '100%', sm: 'auto' } }}>
-          {!hidePlantSelector && tab === 'inventory' && (
-            <FormControl size="small" sx={responsiveSelect}>
-              <InputLabel>Plant</InputLabel>
-              <Select value={filterPlant} label="Plant" onChange={(e) => setFilterPlant(e.target.value)}>
-                <MenuItem value="">All plants</MenuItem>
-                {plants.map((p) => <MenuItem key={p.plantId} value={p.plantId}>{p.plantName}</MenuItem>)}
-              </Select>
-            </FormControl>
-          )}
-          {tab === 'inventory' && (
-            <Button variant="contained" startIcon={<CellTower />} onClick={() => setTab('pair')}>
-              Pair Sensor Hub
-            </Button>
-          )}
-          {tab === 'inventory' && isSuperAdmin && (
-            <Button variant="outlined" startIcon={<Add />} onClick={openAddInstrument}>
-              Add instrument
-            </Button>
-          )}
-        </Box>
-      </Box>
+      <PageHeader
+        hidden={embedded}
+        title="Field devices"
+        subtitle="Devices assigned to your plants by Control Center. Nodes and sensors appear automatically from authenticated telemetry."
+        actions={(
+          <>
+            {!hidePlantSelector && tab !== 'pair' && (
+              <FormControl size="small" sx={responsiveSelect}>
+                <InputLabel>Plant</InputLabel>
+                <Select value={filterPlant} label="Plant" onChange={(e) => setFilterPlant(e.target.value)}>
+                  <MenuItem value="">All plants</MenuItem>
+                  {plants.map((p) => <MenuItem key={p.plantId} value={p.plantId}>{p.plantName}</MenuItem>)}
+                </Select>
+              </FormControl>
+            )}
+          </>
+        )}
+      />
 
       <Tabs
         value={tab}
         onChange={(_e, value) => setTab(value)}
         sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
       >
-        <Tab value="inventory" label="Inventory" />
-        <Tab value="hubs" label="Hubs & channels" />
-        <Tab value="pair" label="Pair Sensor Hub" />
+        <Tab value="hubs" label={`Devices (${hubs.length})`} />
+        <Tab value="inventory" label={`Sensors (${plantFiltered.length})`} />
+        <Tab value="pair" label="Legacy ESP pair" />
       </Tabs>
 
-      {loadError && <Alert severity="warning" sx={{ mb: 2 }}>{loadError}</Alert>}
+      {loadError && <ErrorState severity="warning" description={loadError} onRetry={loadData} />}
 
       {tab === 'hubs' && (
-        <Card>
-          <TableContainer>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Device</TableCell>
-                  <TableCell>Plant</TableCell>
-                  <TableCell>UID</TableCell>
-                  <TableCell>Chip</TableCell>
-                  <TableCell>Connection</TableCell>
-                  <TableCell>Firmware</TableCell>
-                  <TableCell>Channels</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {hubs.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={7} align="center">
-                      <Box sx={{ py: 3 }}>
-                        <Typography fontWeight={600}>No registered hubs yet</Typography>
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                          Pair a SWARM Sensor Hub to create a device identity, logical channels, and credentials.
-                        </Typography>
-                        <Button variant="contained" startIcon={<CellTower />} onClick={() => setTab('pair')}>
-                          Pair Sensor Hub
-                        </Button>
-                      </Box>
-                    </TableCell>
-                  </TableRow>
-                ) : hubs.map((h) => (
-                  <TableRow key={h.id}>
-                    <TableCell>{h.deviceName}</TableCell>
-                    <TableCell>{h.plantName || h.plantId}</TableCell>
-                    <TableCell>
-                      <Typography variant="body2" fontFamily="monospace">{h.deviceUid}</Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="body2" fontFamily="monospace">{h.chipId || '—'}</Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Chip
-                        size="small"
-                        label={h.connectionStatus || 'Not Connected'}
-                        color={h.connectionStatus === 'Connected' ? 'success' : 'default'}
-                        variant="outlined"
-                      />
-                    </TableCell>
-                    <TableCell>{h.firmwareVersion || 'Unknown'}</TableCell>
-                    <TableCell>
-                      {(h.channels || []).map((c) => (
-                        <Chip
-                          key={c.channelId}
-                          size="small"
-                          sx={{ mr: 0.5, mb: 0.5 }}
-                          label={`ch${c.channelId}: ${c.instrumentTag || c.measurementType} (${c.dataStatus || 'No Data'})`}
-                        />
-                      ))}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
-        </Card>
+        hubs.length === 0 ? (
+          <Card>
+            <EmptyState
+              title="No devices assigned yet"
+              description="Control Center registers and assigns devices to your tenant and plants. After the hardware publishes telemetry, they appear here automatically — there is no second pairing step."
+            />
+          </Card>
+        ) : (
+          <Grid container spacing={2}>
+            <Grid item xs={12}>
+              <SearchAndFilter
+                search={hubCollection.search}
+                onSearch={hubCollection.setSearch}
+                searchPlaceholder="Search device UID, name, plant…"
+                sortKey={hubCollection.sortKey}
+                sortDir={hubCollection.sortDir}
+                onSortKey={hubCollection.toggleSort}
+                sortOptions={[
+                  { value: 'deviceName', label: 'Name' },
+                  { value: 'deviceUid', label: 'UID' },
+                  { value: 'status', label: 'Status' },
+                  { value: 'lastSeenAt', label: 'Last seen' },
+                ]}
+                countLabel={`${hubCollection.filteredCount} of ${hubCollection.total}`}
+              />
+            </Grid>
+            {hubCollection.items.map((h) => (
+              <Grid item xs={12} md={6} lg={4} key={h.id}>
+                <DeviceCard
+                  device={h}
+                  labels={labels}
+                  units={units}
+                  onOpen={(d) => navigate(`/sensors/${d.id}`)}
+                />
+              </Grid>
+            ))}
+            <Grid item xs={12}>
+              <CollectionPager
+                page={hubCollection.page}
+                pageCount={hubCollection.pageCount}
+                total={hubCollection.total}
+                filteredCount={hubCollection.filteredCount}
+                onPage={hubCollection.setPage}
+                pageSize={PAGE_SIZE}
+              />
+            </Grid>
+            <Grid item xs={12}>
+              <Card>
+                <CardContent>
+                  <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1 }}>Channel detail</Typography>
+                  <TableContainer>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Device</TableCell>
+                          <TableCell>Plant</TableCell>
+                          <TableCell>UID</TableCell>
+                          <TableCell>Channel</TableCell>
+                          <TableCell>Type</TableCell>
+                          <TableCell>Reading</TableCell>
+                          <TableCell>Data</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {hubs.flatMap((h) => (h.channels?.length ? h.channels : [{ _empty: true }]).map((c) => (
+                          <TableRow key={`${h.id}-${c.channelId || 'none'}`}>
+                            <TableCell>{h.deviceName}</TableCell>
+                            <TableCell>{h.plantName || h.plantId}</TableCell>
+                            <TableCell>
+                              <Typography variant="body2" fontFamily="IBM Plex Mono, monospace">{h.deviceUid}</Typography>
+                            </TableCell>
+                            {c._empty ? (
+                              <TableCell colSpan={4}>
+                                <Typography variant="body2" color="text.secondary">No channels reported yet</Typography>
+                              </TableCell>
+                            ) : (
+                              <>
+                                <TableCell>{c.instrumentTag || `ch ${c.channelId}`}</TableCell>
+                                <TableCell>{labels[c.measurementType] || c.measurementType}</TableCell>
+                                <TableCell>
+                                  {c.lastValue != null
+                                    ? `${formatReading(c.lastValue)}${c.engineeringUnit ? ` ${c.engineeringUnit}` : ''}`
+                                    : '—'}
+                                </TableCell>
+                                <TableCell>
+                                  <StatusBadge status={c.dataStatus || (c.active ? 'ACTIVE' : 'INACTIVE')} />
+                                </TableCell>
+                              </>
+                            )}
+                          </TableRow>
+                        )))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+        )
       )}
 
       {tab === 'pair' && (
@@ -250,132 +293,122 @@ export default function Sensors({ fixedPlantId, embedded = false, hidePlantSelec
           hidePlantSelector={hidePlantSelector || Boolean(fixedPlantId || filterPlant)}
           onPaired={() => {
             loadData();
-            setTab('inventory');
+            setTab('hubs');
           }}
         />
       )}
 
       {tab === 'inventory' && (
         <>
-          {isOperator && (
-            <Alert severity="info" sx={{ mb: 2 }}>
-              You can pair a SWARM hub on this plant’s Wi‑Fi. Super Admin maintains the instrument list.
-            </Alert>
-          )}
-          {!isSuperAdmin && !isOperator && (
-            <Alert severity="info" sx={{ mb: 2 }}>
-              Pair hubs here. Contact Super Admin to add P&amp;ID instruments that are not on a SWARM hub.
-            </Alert>
-          )}
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Sensors are discovered from authenticated telemetry on devices Control Center assigned to your plants.
+            Physical nodes are not created here.
+          </Alert>
 
-          <Card>
-            <TableContainer>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Tag / name</TableCell>
-                    <TableCell>Plant</TableCell>
-                    <TableCell>Measurement</TableCell>
-                    <TableCell>Source</TableCell>
-                    <TableCell>Hub IP</TableCell>
-                    <TableCell>Chip ID</TableCell>
-                    <TableCell>Last value</TableCell>
-                    <TableCell>Data</TableCell>
-                    <TableCell>Status</TableCell>
-                    {isSuperAdmin && <TableCell>Actions</TableCell>}
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {filtered.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={isSuperAdmin ? 10 : 9} align="center">
-                        <Box sx={{ py: 4, maxWidth: 520, mx: 'auto' }}>
-                          <Typography fontWeight={600} sx={{ mb: 1 }}>No field devices on this plant yet</Typography>
-                          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                            On site, join the same Wi‑Fi as the SWARM MODEL hub, then pair it.
-                            That creates temperature, humidity, and methane points automatically.
-                            Use Add instrument only for standalone P&amp;ID transmitters (pH, FIT, PIT, TIT).
-                          </Typography>
-                          <Button variant="contained" startIcon={<CellTower />} onClick={() => setTab('pair')}>
-                            Pair Sensor Hub
-                          </Button>
-                        </Box>
-                      </TableCell>
-                    </TableRow>
-                  ) : filtered.map((n) => (
-                    <TableRow key={n.nodeId}>
-                      <TableCell>{n.nodeName}</TableCell>
-                      <TableCell>{n.plantName}</TableCell>
-                      <TableCell>{labels[n.sensorType] || n.sensorType}</TableCell>
-                      <TableCell>
-                        <Chip
-                          size="small"
-                          label={instrumentSource(n)}
-                          color={n.deviceChipId ? 'primary' : 'default'}
-                          variant={n.deviceChipId ? 'filled' : 'outlined'}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        {n.deviceIp ? (
-                          <Typography variant="body2" fontFamily="monospace">{n.deviceIp}</Typography>
-                        ) : '--'}
-                      </TableCell>
-                      <TableCell>
-                        {n.deviceChipId ? (
-                          <Typography variant="body2" fontFamily="monospace">{n.deviceChipId}</Typography>
-                        ) : '--'}
-                      </TableCell>
-                      <TableCell>{n.lastValue != null ? n.lastValue.toFixed(2) : 'No Data'}</TableCell>
-                      <TableCell>
-                        <Chip
-                          label={connectionLabel(n)}
-                          size="small"
-                          color={connectionLabel(n) === 'Live' ? 'success' : connectionLabel(n) === 'Stale' ? 'warning' : 'default'}
-                          variant="outlined"
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Chip
-                          label={n.status || 'Unknown'}
-                          size="small"
-                          color={n.status === 'ACTIVE' ? 'success' : n.status === 'OFFLINE' ? 'error' : 'default'}
-                        />
-                      </TableCell>
-                      {isSuperAdmin && (
-                        <TableCell>
-                          <IconButton size="small" onClick={() => handleToggle(n.nodeId, n.status)} title="Enable or disable">
-                            <PowerSettingsNew />
-                          </IconButton>
-                          <IconButton
-                            size="small"
-                            onClick={() => {
-                              setEditId(n.nodeId);
-                              setForm({ ...n, plantId: n.plantId });
-                              setDialogOpen(true);
-                            }}
-                          >
-                            <Edit />
-                          </IconButton>
-                          <IconButton size="small" color="error" onClick={() => handleDelete(n.nodeId)}>
-                            <Delete />
-                          </IconButton>
-                        </TableCell>
-                      )}
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </Card>
+          <SearchAndFilter
+            search={collection.search}
+            onSearch={collection.setSearch}
+            searchPlaceholder="Search tags, types, chip IDs…"
+            view={view}
+            onViewChange={setView}
+            sortKey={collection.sortKey}
+            sortDir={collection.sortDir}
+            onSortKey={collection.toggleSort}
+            sortOptions={[
+              { value: 'nodeName', label: 'Name' },
+              { value: 'sensorType', label: 'Type' },
+              { value: 'lastValue', label: 'Reading' },
+              { value: 'lastReadingAt', label: 'Updated' },
+            ]}
+            filters={[
+              {
+                key: 'sensorType',
+                label: 'Type',
+                value: typeFilter,
+                onChange: setTypeFilter,
+                options: [
+                  { value: 'ALL', label: 'All types' },
+                  ...installedTypes.map((t) => ({ value: t, label: labels[t] || t })),
+                ],
+              },
+              {
+                key: 'status',
+                label: 'Data',
+                value: statusFilter,
+                onChange: setStatusFilter,
+                options: [
+                  { value: 'ALL', label: 'All' },
+                  { value: 'LIVE', label: 'Live' },
+                  { value: 'STALE', label: 'Stale' },
+                  { value: 'NO_DATA', label: 'No data' },
+                ],
+              },
+            ]}
+            countLabel={`${collection.filteredCount} of ${collection.total}`}
+          />
+
+          {view === 'grid' ? (
+            <SensorGrid
+              sensors={collection.items}
+              labels={labels}
+              units={units}
+              page={collection.page}
+              pageCount={collection.pageCount}
+              total={collection.total}
+              filteredCount={collection.filteredCount}
+              onPage={collection.setPage}
+              pageSize={PAGE_SIZE}
+              emptyTitle="No sensors discovered yet"
+              emptyDescription="When assigned devices publish telemetry, nodes and channels appear here automatically."
+            />
+          ) : (
+            <Card>
+              <SensorTable
+                sensors={collection.items}
+                labels={labels}
+                units={units}
+                sortKey={collection.sortKey}
+                sortDir={collection.sortDir}
+                onSort={collection.toggleSort}
+                page={collection.page}
+                pageCount={collection.pageCount}
+                total={collection.total}
+                filteredCount={collection.filteredCount}
+                onPage={collection.setPage}
+                pageSize={PAGE_SIZE}
+                emptyTitle="No sensors discovered yet"
+                emptyDescription="When assigned devices publish telemetry, nodes and channels appear here automatically."
+                actions={isSuperAdmin ? (n) => (
+                  <>
+                    <IconButton size="small" onClick={() => handleToggle(n.nodeId, n.status)} title="Enable or disable">
+                      <PowerSettingsNew />
+                    </IconButton>
+                    <IconButton
+                      size="small"
+                      onClick={() => {
+                        setEditId(n.nodeId);
+                        setForm({ ...n, plantId: n.plantId });
+                        setDialogOpen(true);
+                      }}
+                    >
+                      <Edit />
+                    </IconButton>
+                    <IconButton size="small" color="error" onClick={() => handleDelete(n.nodeId)}>
+                      <Delete />
+                    </IconButton>
+                  </>
+                ) : undefined}
+              />
+            </Card>
+          )}
         </>
       )}
 
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>{editId ? 'Edit instrument' : 'Add instrument'}</DialogTitle>
+        <DialogTitle>Edit sensor tag</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1, mb: 1 }}>
-            Use this for P&amp;ID instruments that are not on a SWARM hub. Hub points
-            (temperature, humidity, methane) are created when you pair the hub.
+            Rename or retag a discovered sensor. Physical nodes are created only from authenticated telemetry.
           </Typography>
           <Grid container spacing={2} sx={{ mt: 0 }}>
             <Grid item xs={12}>

@@ -1,6 +1,7 @@
 // PURPOSE: Application service implementing SWARM plantaccess business rules.
 package com.biopower.service;
 
+import com.biopower.model.entity.Device;
 import com.biopower.model.entity.Plant;
 import com.biopower.model.entity.SensorNode;
 import com.biopower.repository.UserRepository;
@@ -49,6 +50,29 @@ public class PlantAccessService {
         assertPlantAppUser(principal);
         if (plantId == null || !resolveAccessiblePlantIds(principal).contains(plantId)) {
             throw new AccessDeniedException("You do not have access to this plant");
+        }
+    }
+
+    public boolean canAccessDevice(UserPrincipal principal, Device device) {
+        if (device == null) {
+            return false;
+        }
+        try {
+            assertCanAccessDevice(principal, device);
+            return true;
+        } catch (Exception ex) {
+            return false;
+        }
+    }
+
+    public void assertCanAccessDevice(UserPrincipal principal, Device device) {
+        if (device == null) {
+            throw new AccessDeniedException("You do not have access to this device");
+        }
+        assertCanAccessPlant(principal, device.getPlantId());
+        if (principal.getCompanyId() != null && device.getTenantId() != null
+                && !principal.getCompanyId().equals(device.getTenantId())) {
+            throw new AccessDeniedException("You do not have access to this device");
         }
     }
 

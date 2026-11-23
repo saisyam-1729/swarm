@@ -1,42 +1,15 @@
-// PURPOSE: SWARM plant-app page: Signup.
+// PURPOSE: Account signup screen.
 import { useEffect, useState } from 'react';
 import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import {
-  Box, Card, CardContent, TextField, Button, Typography, Alert,
-  InputAdornment, IconButton, Link, CircularProgress, Divider,
+  TextField, Button, Typography, Alert, InputAdornment, IconButton, Link,
+  CircularProgress, Divider,
 } from '@mui/material';
 import { Visibility, VisibilityOff } from '@mui/icons-material';
 import { useAuth } from '../context/AuthContext';
-import Logo from '../components/common/Logo';
 import { networkErrorMessage } from '../utils/networkError';
 import { loadSsoConfig, redirectToSso } from '../utils/sso';
-
-const O = {
-  amber: '#FF9500',
-  marigold: '#FFB340',
-  deep: '#CC7A00',
-  bg: '#0C0C0E',
-  card: '#18181B',
-  border: '#2E2E33',
-  muted: '#98989F',
-  text: '#F5F5F7',
-};
-
-const inputSx = {
-  '& .MuiOutlinedInput-root': {
-    borderRadius: 2,
-    bgcolor: '#111114',
-    color: O.text,
-    '& fieldset': { borderColor: O.border },
-    '&:hover fieldset': { borderColor: '#444' },
-    '&.Mui-focused fieldset': { borderColor: O.amber, borderWidth: 2 },
-    '&.Mui-focused': { boxShadow: '0 0 0 3px rgba(255, 149, 0, 0.18)' },
-  },
-  '& .MuiInputLabel-root': { color: O.muted },
-  '& .MuiInputLabel-root.Mui-focused': { color: O.amber },
-  '& .MuiOutlinedInput-input::placeholder': { color: O.muted },
-  '& .MuiFormHelperText-root': { color: O.muted },
-};
+import AuthShell, { authInputSx, AUTH_COLORS } from '../components/auth/AuthShell';
 
 export default function Signup() {
   const [form, setForm] = useState({
@@ -110,142 +83,78 @@ export default function Signup() {
     }
   };
 
-  if (checkingSso) {
-    return (
-      <Box sx={{
-        minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: O.bg,
-      }}>
-        <CircularProgress sx={{ color: O.amber }} />
-      </Box>
-    );
-  }
-
   return (
-    <Box sx={{
-      minHeight: '100vh',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      p: 2,
-      bgcolor: O.bg,
-      backgroundImage: `
-        radial-gradient(ellipse 80% 60% at 50% -10%, rgba(255, 149, 0, 0.18) 0%, transparent 60%),
-        radial-gradient(ellipse 50% 40% at 80% 100%, rgba(255, 179, 64, 0.08) 0%, transparent 50%)
-      `,
-    }}>
-      <Card sx={{
-        maxWidth: 420,
-        width: '100%',
-        borderRadius: 3,
-        bgcolor: O.card,
-        border: `1px solid ${O.border}`,
-        boxShadow: '0 0 0 1px rgba(255,149,0,0.06), 0 24px 64px rgba(0,0,0,0.5)',
-      }}>
-        <CardContent sx={{ p: 4 }}>
-          <Box sx={{ textAlign: 'center', mb: 3 }}>
-            <Logo height={48} sx={{ mx: 'auto', mb: 2 }} />
-            <Typography variant="overline" sx={{ color: O.amber, letterSpacing: '0.12em', fontWeight: 700 }}>
-              SWARM by nanoFarm
-            </Typography>
-            <Typography variant="body2" sx={{ color: O.muted, mt: 0.5 }}>
-              AI-IoT Plant Health Monitoring
-            </Typography>
-          </Box>
+    <AuthShell
+      loading={checkingSso}
+      title="Create your account"
+      subtitle="Join SWARM to monitor plant health, view alerts, and connect devices."
+    >
+      {error && <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>{error}</Alert>}
 
-          <Typography variant="h6" fontWeight={700} sx={{ color: O.text, textAlign: 'center', mb: 0.5 }}>
-            Create your account
-          </Typography>
-          <Typography variant="body2" sx={{ color: O.muted, textAlign: 'center', mb: 3 }}>
-            Join SWARM to monitor plant health, view alerts, and connect devices.
-          </Typography>
+      {ssoAvailable && (
+        <>
+          <Button
+            fullWidth variant="outlined" size="large" onClick={handleEmpowerSignUp}
+            sx={{
+              py: 1.5, borderRadius: 2, fontWeight: 600, textTransform: 'none',
+              color: AUTH_COLORS.text, borderColor: AUTH_COLORS.border,
+              '&:hover': { borderColor: AUTH_COLORS.accent, bgcolor: 'rgba(56,189,248,0.08)' },
+            }}
+          >
+            Sign up with emPOWER account
+          </Button>
+          <Divider sx={{ my: 2.5, borderColor: AUTH_COLORS.border }}>
+            <Typography variant="caption" sx={{ color: AUTH_COLORS.muted }}>or</Typography>
+          </Divider>
+        </>
+      )}
 
-          {error && <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>{error}</Alert>}
+      <form onSubmit={handleSubmit}>
+        <TextField fullWidth label="Full name" margin="normal" value={form.name} onChange={updateField('name')} required sx={authInputSx} />
+        <TextField fullWidth label="Email" type="email" margin="normal" value={form.email} onChange={updateField('email')} required sx={authInputSx} />
+        <TextField fullWidth label="Mobile (optional)" type="tel" margin="normal" value={form.mobile} onChange={updateField('mobile')} sx={authInputSx} />
+        <TextField
+          fullWidth label="Password" type={showPassword ? 'text' : 'password'} margin="normal"
+          value={form.password} onChange={updateField('password')} required
+          helperText="At least 6 characters" sx={authInputSx}
+          InputProps={{
+            endAdornment: (
+              <InputAdornment position="end">
+                <IconButton onClick={() => setShowPassword(!showPassword)} edge="end" sx={{ color: AUTH_COLORS.accent }}>
+                  {showPassword ? <VisibilityOff /> : <Visibility />}
+                </IconButton>
+              </InputAdornment>
+            ),
+          }}
+        />
+        <TextField
+          fullWidth label="Confirm password" type={showConfirmPassword ? 'text' : 'password'} margin="normal"
+          value={form.confirmPassword} onChange={updateField('confirmPassword')} required sx={authInputSx}
+          InputProps={{
+            endAdornment: (
+              <InputAdornment position="end">
+                <IconButton onClick={() => setShowConfirmPassword(!showConfirmPassword)} edge="end" sx={{ color: AUTH_COLORS.accent }}>
+                  {showConfirmPassword ? <VisibilityOff /> : <Visibility />}
+                </IconButton>
+              </InputAdornment>
+            ),
+          }}
+        />
+        <Button
+          fullWidth type="submit" variant="contained" size="large" disabled={loading}
+          sx={{ mt: 2.5, py: 1.5, borderRadius: 2, fontWeight: 700, textTransform: 'none' }}
+        >
+          {loading ? <CircularProgress size={24} /> : 'Create Account'}
+        </Button>
+      </form>
 
-          {ssoAvailable && (
-            <>
-              <Button
-                fullWidth variant="outlined" size="large" onClick={handleEmpowerSignUp}
-                sx={{
-                  py: 1.5, borderRadius: 2, fontWeight: 600, textTransform: 'none',
-                  color: O.text, borderColor: O.border,
-                  '&:hover': { borderColor: O.amber, bgcolor: 'rgba(255,149,0,0.08)' },
-                }}
-              >
-                Sign up with emPOWER account
-              </Button>
-              <Divider sx={{ my: 2.5, borderColor: O.border }}>
-                <Typography variant="caption" sx={{ color: O.muted }}>or</Typography>
-              </Divider>
-            </>
-          )}
-
-          <form onSubmit={handleSubmit}>
-            <TextField
-              fullWidth label="Full name" margin="normal"
-              value={form.name} onChange={updateField('name')} required sx={inputSx}
-            />
-            <TextField
-              fullWidth label="Email" type="email" margin="normal"
-              value={form.email} onChange={updateField('email')} required sx={inputSx}
-            />
-            <TextField
-              fullWidth label="Mobile (optional)" type="tel" margin="normal"
-              value={form.mobile} onChange={updateField('mobile')} sx={inputSx}
-            />
-            <TextField
-              fullWidth label="Password" type={showPassword ? 'text' : 'password'} margin="normal"
-              value={form.password} onChange={updateField('password')} required
-              helperText="At least 6 characters" sx={inputSx}
-              InputProps={{
-                endAdornment: (
-                  <InputAdornment position="end">
-                    <IconButton onClick={() => setShowPassword(!showPassword)} edge="end" sx={{ color: O.amber }}>
-                      {showPassword ? <VisibilityOff /> : <Visibility />}
-                    </IconButton>
-                  </InputAdornment>
-                ),
-              }}
-            />
-            <TextField
-              fullWidth label="Confirm password" type={showConfirmPassword ? 'text' : 'password'} margin="normal"
-              value={form.confirmPassword} onChange={updateField('confirmPassword')} required sx={inputSx}
-              InputProps={{
-                endAdornment: (
-                  <InputAdornment position="end">
-                    <IconButton onClick={() => setShowConfirmPassword(!showConfirmPassword)} edge="end" sx={{ color: O.amber }}>
-                      {showConfirmPassword ? <VisibilityOff /> : <Visibility />}
-                    </IconButton>
-                  </InputAdornment>
-                ),
-              }}
-            />
-            <Button
-              fullWidth type="submit" variant="contained" size="large" disabled={loading}
-              sx={{
-                mt: 2.5, py: 1.5, borderRadius: 2,
-                fontWeight: 700, fontSize: '0.95rem', textTransform: 'none',
-                color: '#000',
-                bgcolor: O.amber,
-                boxShadow: `0 0 24px rgba(255, 149, 0, 0.35)`,
-                '&:hover': {
-                  bgcolor: O.marigold,
-                  boxShadow: `0 0 32px rgba(255, 179, 64, 0.45)`,
-                },
-              }}
-            >
-              {loading ? <CircularProgress size={24} sx={{ color: '#000' }} /> : 'Create Account'}
-            </Button>
-          </form>
-
-          <Divider sx={{ my: 2.5, borderColor: O.border }} />
-          <Typography variant="body2" sx={{ textAlign: 'center', color: O.muted }}>
-            Already have an account?{' '}
-            <Link component={RouterLink} to="/login" fontWeight={700} sx={{ color: O.amber, '&:hover': { color: O.marigold } }}>
-              Sign in
-            </Link>
-          </Typography>
-        </CardContent>
-      </Card>
-    </Box>
+      <Divider sx={{ my: 2.5, borderColor: AUTH_COLORS.border }} />
+      <Typography variant="body2" sx={{ textAlign: 'center', color: AUTH_COLORS.muted }}>
+        Already have an account?{' '}
+        <Link component={RouterLink} to="/login" fontWeight={700} sx={{ color: AUTH_COLORS.accent }}>
+          Sign in
+        </Link>
+      </Typography>
+    </AuthShell>
   );
 }

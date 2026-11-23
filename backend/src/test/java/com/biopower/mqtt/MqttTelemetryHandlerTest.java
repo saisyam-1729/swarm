@@ -39,6 +39,7 @@ class MqttTelemetryHandlerTest {
     void setUp() {
         SecurityContextHolder.clearContext();
         handler = new MqttTelemetryHandler(telemetryIngestService, deviceRepository, new ObjectMapper());
+        org.springframework.test.util.ReflectionTestUtils.setField(handler, "trustBrokerAcls", false);
         device = Device.builder()
                 .id(11L)
                 .plantId(7L)
@@ -133,6 +134,27 @@ class MqttTelemetryHandlerTest {
     }
 
     @Test
+    void unauthenticatedPublisherIsRejected() {
+        when(deviceRepository.findFirstByDeviceUid("SWARM-HUB-ABCD")).thenReturn(Optional.of(device));
+        assertThrows(UnauthorizedException.class,
+                () -> handler.handle("swarm/v1/" + device.getTenantId() + "/7/SWARM-HUB-ABCD/telemetry",
+                        "{\"readings\":[{\"channelId\":1,\"value\":1}]}",
+                        null, null));
+        verify(telemetryIngestService, never()).ingest(any());
+    }
+
+    @Test
+    void suspendedDeviceIsRejected() {
+        device.setLifecycle(DeviceLifecycle.SUSPENDED);
+        when(deviceRepository.findFirstByDeviceUid("SWARM-HUB-ABCD")).thenReturn(Optional.of(device));
+        assertThrows(UnauthorizedException.class,
+                () -> handler.handle("swarm/v1/" + device.getTenantId() + "/7/SWARM-HUB-ABCD/telemetry",
+                        "{\"readings\":[{\"channelId\":1,\"value\":1}]}",
+                        "SWARM-HUB-ABCD", "swd_secret"));
+        verify(telemetryIngestService, never()).ingest(any());
+    }
+
+    @Test
     void unknownDeviceIsRejected() {
         when(deviceRepository.findFirstByDeviceUid("SWARM-HUB-ABCD")).thenReturn(Optional.empty());
         assertThrows(UnauthorizedException.class,
@@ -146,6 +168,44 @@ class MqttTelemetryHandlerTest {
     void invalidJsonIsRejected() {
         assertThrows(com.biopower.exception.BadRequestException.class,
                 () -> handler.handle("swarm/v1/_/7/SWARM-HUB-ABCD/telemetry", "{not-json", null, null));
+        verify(telemetryIngestService, never()).ingest(any());
+    }
+
+    @Test
+    void payloadDeviceIdMismatchWithTopicIsRejected() {
+        when(deviceRepository.findFirstByDeviceUid("SWARM-HUB-ABCD")).thenReturn(Optional.of(device));
+        String topic = "swarm/v1/" + device.getTenantId() + "/7/SWARM-HUB-ABCD/telemetry";
+        String payload = """
+                {"schemaVersion":"1.0","deviceId":"SWARM-HUB-OTHER","messageId":"x",
+                 "readings":[{"channelId":1,"value":1}]}
+                """;
+        assertThrows(UnauthorizedException.class,
+                () -> handler.handle(topic, payload, "SWARM-HUB-ABCD", "swd_secret"));
+        verify(telemetryIngestService, never()).ingest(any());
+    }
+
+    @Test
+    void missingReadingsValueIsRejected() {
+        when(deviceRepository.findFirstByDeviceUid("SWARM-HUB-ABCD")).thenReturn(Optional.of(device));
+        String topic = "swarm/v1/" + device.getTenantId() + "/7/SWARM-HUB-ABCD/telemetry";
+        String payload = """
+                {"schemaVersion":"1.0","deviceId":"SWARM-HUB-ABCD","messageId":"x",
+                 "readings":[{"channelId":1}]}
+                """;
+        assertThrows(com.biopower.exception.BadRequestException.class,
+                () -> handler.handle(topic, payload, "SWARM-HUB-ABCD", "swd_secret"));
+        verify(telemetryIngestService, never()).ingest(any());
+    }
+
+    @Test
+    void emptyReadingsArrayIsRejected() {
+        when(deviceRepository.findFirstByDeviceUid("SWARM-HUB-ABCD")).thenReturn(Optional.of(device));
+        String topic = "swarm/v1/" + device.getTenantId() + "/7/SWARM-HUB-ABCD/telemetry";
+        String payload = """
+                {"schemaVersion":"1.0","deviceId":"SWARM-HUB-ABCD","messageId":"x","readings":[]}
+                """;
+        assertThrows(com.biopower.exception.BadRequestException.class,
+                () -> handler.handle(topic, payload, "SWARM-HUB-ABCD", "swd_secret"));
         verify(telemetryIngestService, never()).ingest(any());
     }
 

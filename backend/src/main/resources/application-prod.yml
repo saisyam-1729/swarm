@@ -1,4 +1,4 @@
-# PURPOSE: Production Spring profile used by Docker Compose.
+# PURPOSE: Production / demo Spring profile (Docker Compose or Raspberry Pi edge).
 spring:
   flyway:
     enabled: ${FLYWAY_ENABLED:true}
@@ -10,14 +10,25 @@ spring:
       ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:validate}
   datasource:
     hikari:
-      maximum-pool-size: 5
-      connection-timeout: 30000
+      maximum-pool-size: ${DB_POOL_SIZE:5}
+      minimum-idle: ${DB_POOL_MIN_IDLE:1}
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:30000}
+      initialization-fail-timeout: ${DB_INIT_FAIL_TIMEOUT_MS:30000}
 
 server:
   port: ${PORT:8080}
 
+# Demo/production: disable unauthenticated legacy ingest unless explicitly re-enabled.
+# Local development keeps SWARM_IOT_COMPAT_LEGACY=true via the default profile.
+biopower:
+  iot:
+    compat-legacy: ${SWARM_IOT_COMPAT_LEGACY:false}
+  cors:
+    allow-any-http-origin: ${SWARM_CORS_ALLOW_ANY_HTTP:false}
+
 logging:
   level:
     com.biopower: INFO
+    com.biopower.mqtt: INFO
     org.springframework.security: WARN
     org.hibernate: WARN

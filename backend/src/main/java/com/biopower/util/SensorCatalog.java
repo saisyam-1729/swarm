@@ -45,6 +45,7 @@ public final class SensorCatalog {
             case PRESSURE_TRANSMITTER -> "Pressure Indicator Transmitter";
             case FLOW_TRANSMITTER -> "Flow Indicator Transmitter";
             case TEMPERATURE_TRANSMITTER -> "Temperature Transmitter";
+            case GENERIC -> "Generic";
         };
     }
 
@@ -59,6 +60,7 @@ public final class SensorCatalog {
             case LIQUID_LEVEL -> "%";
             case CARBON_DIOXIDE -> "%";
             case HYDROGEN_SULFIDE, AMMONIA -> "ppm";
+            case GENERIC -> "";
         };
     }
 

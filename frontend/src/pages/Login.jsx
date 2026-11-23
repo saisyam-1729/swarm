@@ -2,42 +2,15 @@
 import { useEffect, useState } from 'react';
 import { Link as RouterLink, useNavigate, useLocation } from 'react-router-dom';
 import {
-  Box, Card, CardContent, TextField, Button, Typography, Alert,
-  InputAdornment, IconButton, Link, CircularProgress, Divider,
+  Box, TextField, Button, Typography, Alert, InputAdornment, IconButton, Link,
+  CircularProgress, Divider,
 } from '@mui/material';
 import { Visibility, VisibilityOff } from '@mui/icons-material';
 import { useAuth } from '../context/AuthContext';
-import Logo from '../components/common/Logo';
 import { loginErrorMessage } from '../utils/networkError';
 import { loadSsoConfig, redirectToSso } from '../utils/sso';
 import { getHomeRoute } from '../utils/homeRoute';
-
-const O = {
-  amber: '#FF9500',
-  marigold: '#FFB340',
-  honey: '#FFCC02',
-  deep: '#CC7A00',
-  bg: '#0C0C0E',
-  card: '#18181B',
-  border: '#2E2E33',
-  muted: '#98989F',
-  text: '#F5F5F7',
-};
-
-const inputSx = {
-  '& .MuiOutlinedInput-root': {
-    borderRadius: 2,
-    bgcolor: '#111114',
-    color: O.text,
-    '& fieldset': { borderColor: O.border },
-    '&:hover fieldset': { borderColor: '#444' },
-    '&.Mui-focused fieldset': { borderColor: O.amber, borderWidth: 2 },
-    '&.Mui-focused': { boxShadow: '0 0 0 3px rgba(255, 149, 0, 0.18)' },
-  },
-  '& .MuiInputLabel-root': { color: O.muted },
-  '& .MuiInputLabel-root.Mui-focused': { color: O.amber },
-  '& .MuiOutlinedInput-input::placeholder': { color: O.muted },
-};
+import AuthShell, { authInputSx, AUTH_COLORS } from '../components/auth/AuthShell';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -101,145 +74,89 @@ export default function Login() {
     }
   };
 
-  if (checkingSso) {
-    return (
-      <Box sx={{
-        minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: O.bg,
-      }}>
-        <CircularProgress sx={{ color: O.amber }} />
-      </Box>
-    );
-  }
-
   return (
-    <Box sx={{
-      minHeight: '100vh',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      p: 2,
-      bgcolor: O.bg,
-      backgroundImage: `
-        radial-gradient(ellipse 80% 60% at 50% -10%, rgba(255, 149, 0, 0.18) 0%, transparent 60%),
-        radial-gradient(ellipse 50% 40% at 80% 100%, rgba(255, 179, 64, 0.08) 0%, transparent 50%)
-      `,
-    }}>
-      <Card sx={{
-        maxWidth: 420,
-        width: '100%',
-        borderRadius: 3,
-        bgcolor: O.card,
-        border: `1px solid ${O.border}`,
-        boxShadow: '0 0 0 1px rgba(255,149,0,0.06), 0 24px 64px rgba(0,0,0,0.5)',
-      }}>
-        <CardContent sx={{ p: 4 }}>
-          <Box sx={{ textAlign: 'center', mb: 3 }}>
-            <Logo height={48} sx={{ mx: 'auto', mb: 2 }} />
-            <Typography variant="overline" sx={{ color: O.amber, letterSpacing: '0.12em', fontWeight: 700 }}>
-              SWARM by nanoFarm
-            </Typography>
-            <Typography variant="body2" sx={{ color: O.muted, mt: 0.5 }}>
-              AI-IoT Plant Health Monitoring
-            </Typography>
-          </Box>
+    <AuthShell
+      loading={checkingSso}
+      title={forgotMode ? 'Reset password' : 'Welcome back'}
+      subtitle={forgotMode ? 'Enter your email for a reset link' : 'Sign in to your account'}
+    >
+      {import.meta.env.DEV
+        && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && (
+        <Alert severity="info" sx={{ mb: 2, borderRadius: 2 }}>
+          LAN access from other computers: use the host PC&apos;s network URL, not localhost.
+        </Alert>
+      )}
 
-          <Typography variant="h6" fontWeight={700} sx={{ color: O.text, textAlign: 'center', mb: 0.5 }}>
-            {forgotMode ? 'Reset password' : 'Welcome back'}
-          </Typography>
-          <Typography variant="body2" sx={{ color: O.muted, textAlign: 'center', mb: 3 }}>
-            {forgotMode ? 'Enter your email for a reset link' : 'Sign in to your account'}
-          </Typography>
+      {error && <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>{error}</Alert>}
+      {success && <Alert severity="success" sx={{ mb: 2, borderRadius: 2 }}>{success}</Alert>}
 
-          {import.meta.env.DEV
-            && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && (
-            <Alert severity="info" sx={{ mb: 2, borderRadius: 2 }}>
-              LAN access from other computers: use the host PC&apos;s network URL
-              {' '}(<strong>http://192.168.29.22:3000</strong>), not <strong>localhost</strong>.
-            </Alert>
-          )}
+      {!forgotMode && ssoAvailable && (
+        <>
+          <Button
+            fullWidth variant="outlined" size="large" onClick={handleEmpowerSignIn}
+            sx={{
+              py: 1.5, borderRadius: 2, fontWeight: 600, textTransform: 'none',
+              color: AUTH_COLORS.text, borderColor: AUTH_COLORS.border,
+              '&:hover': { borderColor: AUTH_COLORS.accent, bgcolor: 'rgba(56,189,248,0.08)' },
+            }}
+          >
+            Sign in with emPOWER account
+          </Button>
+          <Divider sx={{ my: 2.5, borderColor: AUTH_COLORS.border }}>
+            <Typography variant="caption" sx={{ color: AUTH_COLORS.muted }}>or</Typography>
+          </Divider>
+        </>
+      )}
 
-          {error && <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>{error}</Alert>}
-          {success && <Alert severity="success" sx={{ mb: 2, borderRadius: 2 }}>{success}</Alert>}
+      <form onSubmit={forgotMode ? handleForgot : handleLogin}>
+        <TextField
+          fullWidth label="Email" type="email" margin="normal"
+          value={email} onChange={(e) => setEmail(e.target.value)} required sx={authInputSx}
+        />
+        {!forgotMode && (
+          <TextField
+            fullWidth label="Password" type={showPassword ? 'text' : 'password'} margin="normal"
+            value={password} onChange={(e) => setPassword(e.target.value)} required sx={authInputSx}
+            InputProps={{
+              endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton onClick={() => setShowPassword(!showPassword)} edge="end" sx={{ color: AUTH_COLORS.accent }}>
+                    {showPassword ? <VisibilityOff /> : <Visibility />}
+                  </IconButton>
+                </InputAdornment>
+              ),
+            }}
+          />
+        )}
+        <Button
+          fullWidth type="submit" variant="contained" size="large" disabled={loading}
+          sx={{ mt: 2.5, py: 1.5, borderRadius: 2, fontWeight: 700, textTransform: 'none' }}
+        >
+          {loading ? <CircularProgress size={24} /> : forgotMode ? 'Send Reset Link' : 'Sign In'}
+        </Button>
+      </form>
 
-          {!forgotMode && ssoAvailable && (
-            <>
-              <Button
-                fullWidth variant="outlined" size="large" onClick={handleEmpowerSignIn}
-                sx={{
-                  py: 1.5, borderRadius: 2, fontWeight: 600, textTransform: 'none',
-                  color: O.text, borderColor: O.border,
-                  '&:hover': { borderColor: O.amber, bgcolor: 'rgba(255,149,0,0.08)' },
-                }}
-              >
-                Sign in with emPOWER account
-              </Button>
-              <Divider sx={{ my: 2.5, borderColor: O.border }}>
-                <Typography variant="caption" sx={{ color: O.muted }}>or</Typography>
-              </Divider>
-            </>
-          )}
+      <Box sx={{ mt: 2, textAlign: 'center' }}>
+        <Link
+          component="button" variant="body2" type="button"
+          onClick={() => { setForgotMode(!forgotMode); setError(''); setSuccess(''); }}
+          sx={{ color: AUTH_COLORS.accent, fontWeight: 600 }}
+        >
+          {forgotMode ? 'Back to Login' : 'Forgot Password?'}
+        </Link>
+      </Box>
 
-          <form onSubmit={forgotMode ? handleForgot : handleLogin}>
-            <TextField
-              fullWidth label="Email" type="email" margin="normal"
-              value={email} onChange={(e) => setEmail(e.target.value)} required sx={inputSx}
-            />
-            {!forgotMode && (
-              <TextField
-                fullWidth label="Password" type={showPassword ? 'text' : 'password'} margin="normal"
-                value={password} onChange={(e) => setPassword(e.target.value)} required sx={inputSx}
-                InputProps={{
-                  endAdornment: (
-                    <InputAdornment position="end">
-                      <IconButton onClick={() => setShowPassword(!showPassword)} edge="end" sx={{ color: O.amber }}>
-                        {showPassword ? <VisibilityOff /> : <Visibility />}
-                      </IconButton>
-                    </InputAdornment>
-                  ),
-                }}
-              />
-            )}
-            <Button
-              fullWidth type="submit" variant="contained" size="large" disabled={loading}
-              sx={{
-                mt: 2.5, py: 1.5, borderRadius: 2,
-                fontWeight: 700, fontSize: '0.95rem', textTransform: 'none',
-                color: '#000',
-                bgcolor: O.amber,
-                boxShadow: `0 0 24px rgba(255, 149, 0, 0.35)`,
-                '&:hover': {
-                  bgcolor: O.marigold,
-                  boxShadow: `0 0 32px rgba(255, 179, 64, 0.45)`,
-                },
-              }}
-            >
-              {loading ? <CircularProgress size={24} sx={{ color: '#000' }} /> : forgotMode ? 'Send Reset Link' : 'Sign In'}
-            </Button>
-          </form>
-
-          <Box sx={{ mt: 2, textAlign: 'center' }}>
-            <Link
-              component="button" variant="body2" type="button"
-              onClick={() => { setForgotMode(!forgotMode); setError(''); setSuccess(''); }}
-              sx={{ color: O.marigold, fontWeight: 600, '&:hover': { color: O.amber } }}
-            >
-              {forgotMode ? 'Back to Login' : 'Forgot Password?'}
+      {!forgotMode && (
+        <>
+          <Divider sx={{ my: 2.5, borderColor: AUTH_COLORS.border }} />
+          <Typography variant="body2" sx={{ textAlign: 'center', color: AUTH_COLORS.muted }}>
+            Don&apos;t have an account?{' '}
+            <Link component={RouterLink} to="/signup" fontWeight={700} sx={{ color: AUTH_COLORS.accent }}>
+              Sign up
             </Link>
-          </Box>
-
-          {!forgotMode && (
-            <>
-              <Divider sx={{ my: 2.5, borderColor: O.border }} />
-              <Typography variant="body2" sx={{ textAlign: 'center', color: O.muted }}>
-                Don&apos;t have an account?{' '}
-                <Link component={RouterLink} to="/signup" fontWeight={700} sx={{ color: O.amber, '&:hover': { color: O.marigold } }}>
-                  Sign up
-                </Link>
-              </Typography>
-            </>
-          )}
-        </CardContent>
-      </Card>
-    </Box>
+          </Typography>
+        </>
+      )}
+    </AuthShell>
   );
 }

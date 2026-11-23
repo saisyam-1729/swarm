@@ -13,6 +13,9 @@ build/
 backend/.env
 frontend/.env.production
 
+# Mosquitto password file (generated; never commit real hashes)
+docker/mosquitto/passwd
+
 # IDE
 .idea/
 .vscode/

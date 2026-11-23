@@ -2,6 +2,8 @@
 package com.biopower.service;
 
 import com.biopower.dto.request.DeviceChannelRequest;
+import com.biopower.dto.request.DeviceLifecycleRequest;
+import com.biopower.dto.request.DeviceReassignRequest;
 import com.biopower.dto.request.DeviceRegisterRequest;
 import com.biopower.dto.response.ControlCenterIotStatusResponse;
 import com.biopower.dto.response.FieldDeviceChannelResponse;
@@ -11,6 +13,7 @@ import com.biopower.exception.BadRequestException;
 import com.biopower.exception.ResourceNotFoundException;
 import com.biopower.model.entity.Company;
 import com.biopower.model.entity.Device;
+import com.biopower.model.entity.DeviceAuditEvent;
 import com.biopower.model.entity.DeviceChannel;
 import com.biopower.model.entity.IngestRejected;
 import com.biopower.model.entity.Plant;
@@ -20,15 +23,19 @@ import com.biopower.model.enums.DeviceLifecycle;
 import com.biopower.model.enums.NodeStatus;
 import com.biopower.model.enums.SensorType;
 import com.biopower.mqtt.MqttConnectionHealth;
+import com.biopower.repository.DeviceAuditEventRepository;
 import com.biopower.repository.DeviceChannelRepository;
 import com.biopower.repository.DeviceRepository;
 import com.biopower.repository.IngestRejectedRepository;
 import com.biopower.repository.PlantRepository;
 import com.biopower.repository.SensorNodeRepository;
 import com.biopower.util.DeviceSecretHasher;
+import com.biopower.util.DeviceStatuses;
 import com.biopower.util.SensorCatalog;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -55,6 +62,7 @@ public class DeviceProvisioningService {
     private final FieldDeviceQueryService fieldDeviceQueryService;
     private final MqttConnectionHealth mqttConnectionHealth;
     private final IngestRejectedRepository ingestRejectedRepository;
+    private final DeviceAuditEventRepository deviceAuditEventRepository;
 
     @Value("${mqtt.enabled:false}")
     private boolean mqttEnabled;
@@ -76,6 +84,9 @@ public class DeviceProvisioningService {
 
     @Value("${biopower.swarm.mqtt-internal-port:1883}")
     private int mqttInternalPort;
+
+    @Value("${biopower.alert.sensor-timeout-minutes:10}")
+    private int sensorTimeoutMinutes;
 
     @Transactional
     public HardwareProvisioningResponse register(DeviceRegisterRequest request) {
@@ -101,6 +112,9 @@ public class DeviceProvisioningService {
         DeviceLifecycle lifecycle = request.getLifecycle() != null
                 ? request.getLifecycle()
                 : DeviceLifecycle.COMMISSIONING;
+        if (lifecycle == DeviceLifecycle.SUSPENDED || lifecycle == DeviceLifecycle.RETIRED) {
+            throw new BadRequestException("Register the device first, then suspend or retire it");
+        }
         String name = request.getDeviceName() == null || request.getDeviceName().isBlank()
                 ? uid
                 : request.getDeviceName().trim();
@@ -132,7 +146,10 @@ public class DeviceProvisioningService {
             upsertChannel(device.getId(), spec, channelId, node.getNodeId());
         }
 
-        return toProvisioning(deviceRepository.findById(device.getId()).orElse(device), rawSecret, true);
+        HardwareProvisioningResponse response =
+                toProvisioning(deviceRepository.findById(device.getId()).orElse(device), rawSecret, true);
+        audit(device, "REGISTERED", "Assigned to tenant " + tenant.getId() + " plant " + plant.getPlantId());
+        return response;
     }
 
     @Transactional(readOnly = true)
@@ -169,7 +186,87 @@ public class DeviceProvisioningService {
     public HardwareProvisioningResponse rotateSecret(Long id) {
         Device device = requireDevice(id);
         String raw = deviceRegistryService.rotateSecret(id);
+        device.setLegacyCompat(false);
+        device.setConfigVersion(device.getConfigVersion() + 1);
+        deviceRepository.save(device);
+        audit(device, "SECRET_ROTATED", "Previous secret revoked; new secret issued once");
         return toProvisioning(deviceRepository.findById(device.getId()).orElse(device), raw, true);
+    }
+
+    @Transactional
+    public HardwareProvisioningResponse revokeSecret(Long id) {
+        Device device = requireDevice(id);
+        device.setSecretHash(null);
+        device.setLegacyCompat(false);
+        device.setConfigVersion(device.getConfigVersion() + 1);
+        deviceRepository.save(device);
+        audit(device, "SECRET_REVOKED", "Publishing credentials removed");
+        return toProvisioning(device, null, false);
+    }
+
+    @Transactional
+    public FieldDeviceResponse reassign(Long id, DeviceReassignRequest request) {
+        Device device = requireDevice(id);
+        Plant plant = requirePlant(request.getPlantId());
+        Company tenant = plant.getCompany();
+        if (tenant == null) {
+            throw new BadRequestException("Assign the destination plant to a tenant before reassignment");
+        }
+        if (request.getTenantId() != null && !request.getTenantId().equals(tenant.getId())) {
+            throw new BadRequestException("Plant does not belong to the requested tenant");
+        }
+        UUID previousTenant = device.getTenantId();
+        Long previousPlant = device.getPlantId();
+        if (tenant.getId().equals(previousTenant) && plant.getPlantId().equals(previousPlant)) {
+            return fieldDeviceQueryService.describe(device);
+        }
+
+        for (DeviceChannel channel : deviceChannelRepository.findByDeviceIdOrderByChannelIdAsc(device.getId())) {
+            channel.setSensorNodeId(null);
+            deviceChannelRepository.save(channel);
+        }
+        device.setTenantId(tenant.getId());
+        device.setPlantId(plant.getPlantId());
+        device.setConfigVersion(device.getConfigVersion() + 1);
+        if (device.getLifecycle() == DeviceLifecycle.ACTIVE) {
+            device.setLifecycle(DeviceLifecycle.COMMISSIONING);
+        }
+        deviceRepository.save(device);
+        audit(device, "REASSIGNED",
+                "From tenant " + previousTenant + " plant " + previousPlant
+                        + " to tenant " + tenant.getId() + " plant " + plant.getPlantId()
+                        + ". Historical telemetry stays on the previous plant.");
+        return fieldDeviceQueryService.describe(device);
+    }
+
+    @Transactional
+    public FieldDeviceResponse setLifecycle(Long id, DeviceLifecycleRequest request) {
+        Device device = requireDevice(id);
+        DeviceLifecycle next = request.getLifecycle();
+        if (next == null) {
+            throw new BadRequestException("lifecycle is required");
+        }
+        if (next != DeviceLifecycle.SUSPENDED && next != DeviceLifecycle.ACTIVE
+                && next != DeviceLifecycle.RETIRED && next != DeviceLifecycle.COMMISSIONING
+                && next != DeviceLifecycle.MAINTENANCE) {
+            throw new BadRequestException("Unsupported lifecycle transition");
+        }
+        DeviceLifecycle previous = device.getLifecycle();
+        if (next == DeviceLifecycle.ACTIVE && device.getLastSeenAt() == null) {
+            next = DeviceLifecycle.COMMISSIONING;
+        }
+        device.setLifecycle(next);
+        deviceRepository.save(device);
+        String action = next == DeviceLifecycle.SUSPENDED ? "SUSPENDED"
+                : (next == DeviceLifecycle.RETIRED ? "RETIRED" : "REACTIVATED");
+        audit(device, action, "Lifecycle " + previous + " → " + next);
+        return fieldDeviceQueryService.describe(device);
+    }
+
+    @Transactional(readOnly = true)
+    public List<DeviceAuditEvent> listAudit(Long id) {
+        requireDevice(id);
+        return deviceAuditEventRepository.findByDeviceIdOrderByCreatedAtDesc(id);
     }
 
     @Transactional
@@ -287,7 +384,10 @@ public class DeviceProvisioningService {
 
         List<String> notes = new ArrayList<>();
         notes.add("Topic tenant, plant and device UID must match this registered device.");
-        notes.add("Measurement type and unit come from device_channels, not the payload.");
+        notes.add("Unseen channelId values are discovered automatically; pre-creating sensors is optional.");
+        notes.add("Measurement type and unit come from device_channels, or from the payload when a new channel is discovered.");
+        notes.add("Historical telemetry stays on the plant where it was recorded if this device is later reassigned.");
+        notes.add("Broker ACLs should restrict this topic to MQTT username = device UID. SWARM also verifies credentials when the publisher session is visible.");
         notes.add("Legacy topic biopower/sensors/# remains accepted for existing firmware.");
         if (shownOnce) {
             notes.add("Store the device secret now. It is shown once and never stored in plaintext.");
@@ -306,7 +406,9 @@ public class DeviceProvisioningService {
                 .deviceName(device.getDeviceName())
                 .deviceKind(device.getDeviceKind())
                 .lifecycle(device.getLifecycle())
-                .credentialsIssued(device.getSecretHash() != null && !device.getSecretHash().isBlank())
+                .status(DeviceStatuses.operationalStatus(device, sensorTimeoutMinutes))
+                .provisioningStatus(DeviceStatuses.provisioningStatus(device))
+                .credentialsIssued(DeviceStatuses.credentialsIssued(device))
                 .secretShownOnce(shownOnce)
                 .deviceSecret(plaintextSecret)
                 .mqttBrokerHost(mqttPublicHost)
@@ -381,6 +483,32 @@ public class DeviceProvisioningService {
             case GAS_FLOW, FLOW_TRANSMITTER -> 12.5;
             case CARBON_DIOXIDE -> 30.0;
             case HYDROGEN_SULFIDE, AMMONIA -> 5.0;
+            case GENERIC -> 0;
         };
+    }
+
+    private void audit(Device device, String action, String detail) {
+        try {
+            Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+            String actor = auth != null && auth.getName() != null ? auth.getName() : "control-center";
+            deviceAuditEventRepository.save(DeviceAuditEvent.builder()
+                    .deviceId(device.getId())
+                    .deviceUid(device.getDeviceUid())
+                    .tenantId(device.getTenantId())
+                    .plantId(device.getPlantId())
+                    .action(action)
+                    .actor(actor)
+                    .detail(trimAudit(detail))
+                    .build());
+        } catch (Exception ex) {
+            // Audit must never fail registration or ingest.
+        }
+    }
+
+    private static String trimAudit(String detail) {
+        if (detail == null) {
+            return null;
+        }
+        return detail.length() <= 1024 ? detail : detail.substring(0, 1024);
     }
 }

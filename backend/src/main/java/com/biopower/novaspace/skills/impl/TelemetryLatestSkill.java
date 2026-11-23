@@ -92,6 +92,7 @@ public class TelemetryLatestSkill implements NovaSkill {
             case GAS_FLOW, FLOW_TRANSMITTER -> "m³/h";
             case METHANE, CARBON_DIOXIDE, HUMIDITY, LIQUID_LEVEL -> "%";
             case HYDROGEN_SULFIDE, AMMONIA -> "ppm";
+            case GENERIC -> "";
         };
     }
 

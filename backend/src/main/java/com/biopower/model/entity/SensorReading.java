@@ -17,9 +17,15 @@ import java.time.ZoneId;
 import java.util.Locale;
 import java.util.UUID;
 
+/**
+ * Timescale hypertable {@code sensor_readings} keeps physical PK {@code (id, recorded_at)}
+ * because unique constraints must include the partition column. Hibernate 6 rejects
+ * {@code GenerationType.IDENTITY} on composite {@code @IdClass} identifiers, so JPA
+ * identity is the generated {@code id} only. {@code recorded_at} remains a required
+ * mapped column and is still written on insert.
+ */
 @Entity
 @Table(name = "sensor_readings")
-@IdClass(SensorReadingId.class)
 @Access(AccessType.FIELD)
 @Getter
 @Setter
@@ -32,7 +38,6 @@ public class SensorReading {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Id
     @Getter(AccessLevel.NONE)
     @Setter(AccessLevel.NONE)
     @Column(name = "recorded_at", nullable = false)

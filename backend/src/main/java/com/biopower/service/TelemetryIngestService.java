@@ -7,6 +7,7 @@ import com.biopower.exception.UnauthorizedException;
 import com.biopower.model.entity.Device;
 import com.biopower.model.entity.DeviceChannel;
 import com.biopower.model.entity.IngestRejected;
+import com.biopower.model.entity.Plant;
 import com.biopower.model.entity.SensorMessage;
 import com.biopower.model.entity.SensorNode;
 import com.biopower.model.entity.SensorReading;
@@ -14,12 +15,16 @@ import com.biopower.model.enums.DataQuality;
 import com.biopower.model.enums.DeviceLifecycle;
 import com.biopower.model.enums.IngestTransport;
 import com.biopower.model.enums.NodeStatus;
+import com.biopower.model.enums.SensorType;
 import com.biopower.repository.DeviceChannelRepository;
 import com.biopower.repository.DeviceRepository;
 import com.biopower.repository.IngestRejectedRepository;
+import com.biopower.repository.PlantRepository;
 import com.biopower.repository.SensorMessageRepository;
 import com.biopower.repository.SensorNodeRepository;
 import com.biopower.repository.SensorReadingRepository;
+import com.biopower.util.DeviceStatuses;
+import com.biopower.util.SensorCatalog;
 import com.biopower.security.DevicePrincipal;
 import com.biopower.telemetry.IngestEnvelope;
 import com.biopower.telemetry.IngestPoint;
@@ -60,6 +65,7 @@ public class TelemetryIngestService {
     private final DeviceRepository deviceRepository;
     private final DeviceChannelRepository deviceChannelRepository;
     private final SensorNodeRepository sensorNodeRepository;
+    private final PlantRepository plantRepository;
     private final SensorReadingRepository sensorReadingRepository;
     private final SensorMessageRepository sensorMessageRepository;
     private final IngestRejectedRepository ingestRejectedRepository;
@@ -96,8 +102,8 @@ public class TelemetryIngestService {
         DevicePrincipal authenticated = currentDevicePrincipal();
         Device device = resolveDevice(envelope, authenticated);
 
-        if (device.getLifecycle() == DeviceLifecycle.RETIRED) {
-            throw new BadRequestException("Device is retired");
+        if (!DeviceStatuses.canPublish(device)) {
+            throw new UnauthorizedException("Device is " + device.getLifecycle());
         }
         if (envelope.getPlantId() != null && !envelope.getPlantId().equals(device.getPlantId())) {
             throw new UnauthorizedException("Plant does not match authenticated device");
@@ -139,12 +145,7 @@ public class TelemetryIngestService {
             if (!channel.isActive()) {
                 throw new BadRequestException("Channel " + channel.getChannelId() + " is inactive");
             }
-            if (channel.getSensorNodeId() == null) {
-                throw new BadRequestException("Channel " + channel.getChannelId() + " has no mapped sensor node");
-            }
-            SensorNode node = sensorNodeRepository.findById(channel.getSensorNodeId())
-                    .orElseThrow(() -> new BadRequestException("Mapped sensor node missing for channel "
-                            + channel.getChannelId()));
+            SensorNode node = requireNodeOnDevicePlant(device, channel, point);
             if (!node.getPlant().getPlantId().equals(device.getPlantId())) {
                 throw new UnauthorizedException("Cross-plant channel mapping rejected");
             }
@@ -349,14 +350,15 @@ public class TelemetryIngestService {
     }
 
     private DeviceChannel resolveChannel(Device device, IngestPoint point) {
-        if (point.getChannelId() != null) {
-            return deviceChannelRepository.findByDeviceIdAndChannelId(device.getId(), point.getChannelId())
-                    .orElseThrow(() -> new BadRequestException("Unknown channelId " + point.getChannelId()));
+        if (point.getChannelId() != null && !point.getChannelId().isBlank()) {
+            String channelId = point.getChannelId().trim();
+            return deviceChannelRepository.findByDeviceIdAndChannelId(device.getId(), channelId)
+                    .map(existing -> applyDiscoveryMetadata(existing, point))
+                    .orElseGet(() -> discoverChannel(device, channelId, point));
         }
         if (point.getNodeId() != null) {
             return deviceChannelRepository.findByDeviceIdAndSensorNodeId(device.getId(), point.getNodeId())
                     .or(() -> {
-                        // Channel not yet linked — map by node + type for backfilled hubs mid-flight.
                         SensorNode node = sensorNodeRepository
                                 .findByNodeIdAndPlantPlantId(point.getNodeId(), device.getPlantId())
                                 .orElseThrow(() -> new BadRequestException("Invalid plant/node combination"));
@@ -369,6 +371,7 @@ public class TelemetryIngestService {
                                 .channelId(nextChannelId(device.getId()))
                                 .sensorNodeId(node.getNodeId())
                                 .measurementType(node.getSensorType())
+                                .engineeringUnit(SensorCatalog.defaultUnit(node.getSensorType()))
                                 .slope(1.0)
                                 .intercept(0.0)
                                 .active(true)
@@ -379,9 +382,99 @@ public class TelemetryIngestService {
         }
         if (point.getSensorType() != null) {
             return deviceChannelRepository.findByDeviceIdAndMeasurementType(device.getId(), point.getSensorType())
-                    .orElseThrow(() -> new BadRequestException("No channel mapped for " + point.getSensorType()));
+                    .orElseGet(() -> discoverChannel(device, nextChannelId(device.getId()), point));
         }
         throw new BadRequestException("Each reading needs channelId or nodeId");
+    }
+
+    /**
+     * Authenticated telemetry may introduce a previously unseen channel. The physical
+     * device is the node; each channel is one logical sensor. Concurrent MQTT messages
+     * are collapsed by {@code uq_device_channel (device_id, channel_id)}.
+     */
+    private DeviceChannel discoverChannel(Device device, String channelId, IngestPoint point) {
+        try {
+            SensorType type = point.getSensorType() != null ? point.getSensorType() : SensorType.GENERIC;
+            String unit = blankToNull(point.getUnit());
+            if (unit == null) {
+                unit = SensorCatalog.defaultUnit(type);
+            }
+            String tag = blankToNull(point.getName());
+            SensorNode node = createDiscoveredNode(device, channelId, type, tag);
+            DeviceChannel created = DeviceChannel.builder()
+                    .deviceId(device.getId())
+                    .channelId(channelId)
+                    .sensorNodeId(node.getNodeId())
+                    .measurementType(type)
+                    .engineeringUnit(unit)
+                    .instrumentTag(tag)
+                    .slope(1.0)
+                    .intercept(0.0)
+                    .hardMin(SensorCatalog.hardMin(type))
+                    .hardMax(SensorCatalog.hardMax(type))
+                    .active(true)
+                    .build();
+            return deviceChannelRepository.save(created);
+        } catch (DataIntegrityViolationException dup) {
+            return deviceChannelRepository.findByDeviceIdAndChannelId(device.getId(), channelId)
+                    .orElseThrow(() -> new BadRequestException("Unknown channelId " + channelId));
+        }
+    }
+
+    private DeviceChannel applyDiscoveryMetadata(DeviceChannel channel, IngestPoint point) {
+        boolean dirty = false;
+        if (channel.getMeasurementType() == SensorType.GENERIC && point.getSensorType() != null) {
+            channel.setMeasurementType(point.getSensorType());
+            dirty = true;
+        }
+        if ((channel.getEngineeringUnit() == null || channel.getEngineeringUnit().isBlank())
+                && blankToNull(point.getUnit()) != null) {
+            channel.setEngineeringUnit(point.getUnit().trim());
+            dirty = true;
+        }
+        if ((channel.getInstrumentTag() == null || channel.getInstrumentTag().isBlank())
+                && blankToNull(point.getName()) != null) {
+            channel.setInstrumentTag(point.getName().trim());
+            dirty = true;
+        }
+        return dirty ? deviceChannelRepository.save(channel) : channel;
+    }
+
+    private SensorNode requireNodeOnDevicePlant(Device device, DeviceChannel channel, IngestPoint point) {
+        if (channel.getSensorNodeId() != null) {
+            SensorNode node = sensorNodeRepository.findById(channel.getSensorNodeId()).orElse(null);
+            if (node != null && node.getPlant() != null
+                    && node.getPlant().getPlantId().equals(device.getPlantId())) {
+                return node;
+            }
+        }
+        SensorType type = channel.getMeasurementType() != null ? channel.getMeasurementType()
+                : (point.getSensorType() != null ? point.getSensorType() : SensorType.GENERIC);
+        SensorNode node = createDiscoveredNode(device, channel.getChannelId(), type, channel.getInstrumentTag());
+        channel.setSensorNodeId(node.getNodeId());
+        deviceChannelRepository.save(channel);
+        return node;
+    }
+
+    private SensorNode createDiscoveredNode(Device device, String channelId, SensorType type, String tag) {
+        Plant plant = plantRepository.findById(device.getPlantId())
+                .orElseThrow(() -> new BadRequestException("Registered device plant is missing"));
+        String nodeName = blankToNull(tag) != null ? tag.trim() : type.name() + "-" + channelId;
+        SensorNode node = SensorNode.builder()
+                .plant(plant)
+                .nodeName(nodeName)
+                .sensorType(type)
+                .deviceChipId(device.getChipId())
+                .status(NodeStatus.ACTIVE)
+                .build();
+        return sensorNodeRepository.save(node);
+    }
+
+    private static String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value;
     }
 
     private String nextChannelId(Long deviceId) {

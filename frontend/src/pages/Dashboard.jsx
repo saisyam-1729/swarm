@@ -1,36 +1,35 @@
-// PURPOSE: Plant live-monitoring dashboard and empty states.
-import { useState, useEffect } from 'react';
+// PURPOSE: Plant live-monitoring dashboard driven entirely by backend collections.
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box, Grid, Card, CardContent, Typography, Chip, Select, MenuItem,
-  FormControl, InputLabel, CircularProgress, LinearProgress,
-  Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
-  IconButton, Tooltip, Button, Alert,
+  FormControl, InputLabel, CircularProgress, LinearProgress, Button, Alert,
 } from '@mui/material';
 import {
-  Opacity, Thermostat, Speed, Air, LocalFireDepartment,
-  Co2, Warning, Science, BluetoothConnected, Refresh,
-  PrecisionManufacturing, ArrowForward, ContentCopy,
+  Warning, PrecisionManufacturing, ArrowForward, Sensors as SensorsIcon,
+  DevicesOther, Favorite, ShowChart, CellTower,
 } from '@mui/icons-material';
-import { plantAPI, dashboardAPI, alertAPI, deviceAPI, hmiAPI } from '../services/api';
+import { plantAPI, dashboardAPI, alertAPI, deviceAPI, hmiAPI, sensorAPI, fieldDeviceAPI } from '../services/api';
 import { fetchEspStatus } from '../utils/espClient';
-import { getHealthColor, formatDate } from '../utils/constants';
+import { getHealthColor } from '../utils/constants';
 import useSensorCatalog from '../utils/useSensorCatalog';
-import { pageHeaderRow, pageTitleSx, responsiveSelect } from '../utils/responsive';
+import { responsiveSelect } from '../utils/responsive';
+import useCollection from '../utils/useCollection';
 import EmptyState from '../components/common/EmptyState';
+import ErrorState from '../components/common/ErrorState';
+import PageHeader from '../components/common/PageHeader';
+import DashboardStatCard from '../components/common/DashboardStatCard';
+import LoadingSkeleton from '../components/common/LoadingSkeleton';
+import SearchAndFilter from '../components/common/SearchAndFilter';
+import SensorGrid from '../components/telemetry/SensorGrid';
+import SensorTable from '../components/telemetry/SensorTable';
+import DeviceCard from '../components/telemetry/DeviceCard';
+import AlertList from '../components/telemetry/AlertList';
+import { readingFreshness } from '../utils/sensorPresentation';
 
-/** How often the dashboard refreshes from the server (ms). */
 const DASHBOARD_POLL_MS = 10000;
-/** When on same LAN as ESP, pull live readings from the hub this often (ms). */
 const LAN_ESP_SYNC_MS = 10000;
-
-const sensorIcons = {
-  PH: <Opacity />, TEMPERATURE: <Thermostat />, TEMPERATURE_TRANSMITTER: <Thermostat />,
-  HUMIDITY: <Thermostat />, PRESSURE: <Speed />, PRESSURE_TRANSMITTER: <Speed />,
-  GAS_FLOW: <Air />, FLOW_TRANSMITTER: <Air />, METHANE: <LocalFireDepartment />,
-  CARBON_DIOXIDE: <Co2 />, HYDROGEN_SULFIDE: <Warning />, AMMONIA: <Science />,
-  LIQUID_LEVEL: <Opacity />,
-};
+const SENSOR_PAGE_SIZE = 24;
 
 export default function Dashboard({ fixedPlantId, embedded = false, hidePlantSelector = false }) {
   const navigate = useNavigate();
@@ -39,20 +38,33 @@ export default function Dashboard({ fixedPlantId, embedded = false, hidePlantSel
   const [dashboard, setDashboard] = useState(null);
   const [hmiState, setHmiState] = useState(null);
   const [alerts, setAlerts] = useState([]);
+  const [nodes, setNodes] = useState([]);
+  const [hubs, setHubs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncingChip, setSyncingChip] = useState('');
   const [loadError, setLoadError] = useState('');
+  const [sensorView, setSensorView] = useState('grid');
+  const [typeFilter, setTypeFilter] = useState('ALL');
+  const [statusFilter, setStatusFilter] = useState('ALL');
   const { labels, units } = useSensorCatalog();
 
   const fetchData = () => {
     if (!selectedPlant) return;
     setLoadError('');
-    dashboardAPI.getDashboard(selectedPlant)
-      .then(({ data }) => setDashboard(data.data))
-      .catch(() => setLoadError('Unable to load dashboard data. Retrying…'));
-    alertAPI.getAll({ plantId: selectedPlant, status: 'ACTIVE' })
-      .then(({ data }) => setAlerts((data.data || []).slice(0, 5)))
-      .catch(() => {});
+    Promise.all([
+      dashboardAPI.getDashboard(selectedPlant).then(({ data }) => setDashboard(data.data)).catch(() => {
+        setLoadError('Unable to load dashboard data. Retrying…');
+      }),
+      alertAPI.getAll({ plantId: selectedPlant, status: 'ACTIVE' })
+        .then(({ data }) => setAlerts(data.data || []))
+        .catch(() => {}),
+      sensorAPI.getByPlant(selectedPlant)
+        .then(({ data }) => setNodes(data.data || []))
+        .catch(() => setNodes([])),
+      fieldDeviceAPI.list(selectedPlant)
+        .then(({ data }) => setHubs(data.data || []))
+        .catch(() => setHubs([])),
+    ]);
     const plant = plants.find((p) => Number(p.plantId) === Number(selectedPlant));
     if (plant?.hmiEnabled) {
       hmiAPI.getState(selectedPlant).then(({ data }) => setHmiState(data.data)).catch(() => setHmiState(null));
@@ -70,7 +82,6 @@ export default function Dashboard({ fixedPlantId, embedded = false, hidePlantSel
     plantAPI.getAll().then(({ data }) => {
       const list = data.data || [];
       setPlants(list);
-      if (list.length === 0) setLoadError('');
       const pairedPlant = sessionStorage.getItem('dashboardPlantId');
       if (pairedPlant && list.some((p) => p.plantId === Number(pairedPlant))) {
         setSelectedPlant(Number(pairedPlant));
@@ -82,13 +93,12 @@ export default function Dashboard({ fixedPlantId, embedded = false, hidePlantSel
   }, [fixedPlantId]);
 
   useEffect(() => {
-    if (!selectedPlant) return;
+    if (!selectedPlant) return undefined;
     fetchData();
     const interval = setInterval(fetchData, DASHBOARD_POLL_MS);
     return () => clearInterval(interval);
   }, [selectedPlant, plants]);
 
-  // Same-LAN fast path: browser pulls ESP directly, then pushes readings to SWARM.
   useEffect(() => {
     if (!selectedPlant) return undefined;
     const creds = JSON.parse(sessionStorage.getItem('espCreds') || '{}');
@@ -104,13 +114,9 @@ export default function Dashboard({ fixedPlantId, embedded = false, hidePlantSel
           password: creds.password,
           plantId: selectedPlant,
           chipId: creds.chipId,
-          status: {
-            dht: status.dht,
-            mq5: status.mq5,
-            rssi: status.rssi,
-          },
+          status: { dht: status.dht, mq5: status.mq5, rssi: status.rssi },
         });
-        dashboardAPI.getDashboard(selectedPlant).then(({ data }) => setDashboard(data.data));
+        fetchData();
       } catch {
         /* ESP unreachable from this browser — cloud ingest still applies */
       }
@@ -123,13 +129,14 @@ export default function Dashboard({ fixedPlantId, embedded = false, hidePlantSel
 
   const handleSyncDevice = async (device) => {
     const creds = JSON.parse(sessionStorage.getItem('espCreds') || '{}');
-    const ip = device.deviceIp || creds.ip;
+    const ip = device.deviceIp || device.lastIp || creds.ip;
     const password = creds.password;
     if (!ip || !password) {
       window.alert('Re-pair the hub from Field Devices → Pair Sensor Hub to refresh readings (device password required).');
       return;
     }
-    setSyncingChip(device.chipId);
+    const chip = device.chipId || device.deviceUid;
+    setSyncingChip(chip);
     try {
       const status = await fetchEspStatus(ip, password);
       await deviceAPI.syncReadings({
@@ -137,11 +144,7 @@ export default function Dashboard({ fixedPlantId, embedded = false, hidePlantSel
         password,
         plantId: device.plantId || selectedPlant,
         chipId: device.chipId,
-        status: {
-          dht: status.dht,
-          mq5: status.mq5,
-          rssi: status.rssi,
-        },
+        status: { dht: status.dht, mq5: status.mq5, rssi: status.rssi },
       });
       fetchData();
     } catch (e) {
@@ -151,21 +154,71 @@ export default function Dashboard({ fixedPlantId, embedded = false, hidePlantSel
     }
   };
 
-  const copyDeviceIp = async (ip) => {
-    if (!ip) return;
-    try {
-      await navigator.clipboard.writeText(ip);
-    } catch {
-      window.alert(ip);
-    }
-  };
+  const devices = useMemo(() => {
+    if (hubs.length > 0) return hubs;
+    return (dashboard?.pairedDevices || []).map((d) => ({
+      ...d,
+      channels: [],
+      lastIp: d.deviceIp,
+      connectionStatus: d.status,
+    }));
+  }, [hubs, dashboard]);
 
-  if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', mt: 8 }}><CircularProgress /></Box>;
+  const sensorTypes = useMemo(
+    () => [...new Set(nodes.map((n) => n.sensorType).filter(Boolean))].sort(),
+    [nodes],
+  );
+
+  const nodeFilters = useMemo(() => {
+    const next = {};
+    if (typeFilter !== 'ALL') next.sensorType = typeFilter;
+    return next;
+  }, [typeFilter]);
+
+  const statusAwareNodes = useMemo(() => {
+    if (statusFilter === 'ALL') return nodes;
+    return nodes.filter((n) => {
+      const freshness = readingFreshness(n.lastReadingAt);
+      if (statusFilter === 'LIVE') return freshness === 'LIVE';
+      if (statusFilter === 'STALE') return freshness === 'STALE';
+      if (statusFilter === 'NO_DATA') return freshness === 'NO_DATA';
+      if (statusFilter === 'OFFLINE') return n.status === 'OFFLINE' || freshness === 'STALE';
+      return String(n.status) === statusFilter;
+    });
+  }, [nodes, statusFilter]);
+
+  const sensors = useCollection(statusAwareNodes, {
+    searchKeys: ['nodeName', 'sensorType', 'deviceChipId', 'plantName'],
+    initialSortKey: 'nodeName',
+    pageSize: SENSOR_PAGE_SIZE,
+    filters: nodeFilters,
+  });
+
+  const liveCount = nodes.filter((n) => readingFreshness(n.lastReadingAt) === 'LIVE').length;
+  const selectedPlantMeta = plants.find((p) => Number(p.plantId) === Number(selectedPlant));
+  const hasHealthScore = dashboard?.healthScore != null;
+  const healthScore = hasHealthScore ? dashboard.healthScore : 0;
+  const healthStatus = dashboard?.healthStatus || null;
+  const showGas = dashboard?.gasProduction != null;
+
+  if (loading) {
+    return (
+      <Box>
+        <LoadingSkeleton variant="stats" stats={4} />
+        <Box sx={{ mt: 3 }}><LoadingSkeleton variant="cards" count={8} /></Box>
+      </Box>
+    );
+  }
 
   if (!selectedPlant) {
     return (
       <Box>
-        {!embedded && <Typography variant="h5" sx={pageTitleSx}>Live Monitoring Dashboard</Typography>}
+        {!embedded && (
+          <PageHeader
+            title="Live monitoring"
+            subtitle="Tenant plants, devices, and discovered sensors appear here after Control Center assigns a site."
+          />
+        )}
         <EmptyState
           title="No plants assigned"
           description="Control Center needs to create a tenant, Super Admin, and plant before live readings appear here."
@@ -174,69 +227,47 @@ export default function Dashboard({ fixedPlantId, embedded = false, hidePlantSel
     );
   }
 
-  const readings = dashboard?.currentReadings || {};
-  const pairedDevices = dashboard?.pairedDevices || [];
-  const visibleSensorTypes = dashboard?.visibleSensorTypes || [];
-  const hasHealthScore = dashboard?.healthScore != null;
-  const healthScore = hasHealthScore ? dashboard.healthScore : 0;
-  const healthStatus = dashboard?.healthStatus || null;
-
-  const STALE_MS = 10 * 60 * 1000;
-
-  const effectiveDeviceStatus = (device) => {
-    if (device.status === 'INACTIVE' || device.status === 'FAULTY') return device.status;
-    const t = device.lastReadingAt ? new Date(device.lastReadingAt).getTime() : NaN;
-    if (!Number.isFinite(t) || Date.now() - t > STALE_MS) return 'OFFLINE';
-    return device.status === 'ACTIVE' ? 'ACTIVE' : (device.status || 'OFFLINE');
-  };
-
-  const deviceStatusColor = (status) => {
-    if (status === 'ACTIVE') return 'success';
-    if (status === 'OFFLINE' || status === 'FAULTY') return 'error';
-    if (status === 'INACTIVE') return 'warning';
-    return 'default';
-  };
-
   return (
     <Box>
       {(!embedded || !hidePlantSelector) && (
-        <Box sx={pageHeaderRow}>
-          {!embedded && <Typography variant="h5" sx={pageTitleSx}>Live Monitoring Dashboard</Typography>}
-          {!hidePlantSelector && (
+        <PageHeader
+          hidden={embedded}
+          title="Live monitoring"
+          subtitle="Readings, nodes, and devices update from backend telemetry. New sensors appear automatically after ingest."
+          actions={!hidePlantSelector && (
             <FormControl size="small" sx={responsiveSelect}>
-              <InputLabel>Select Plant</InputLabel>
-              <Select value={selectedPlant} label="Select Plant" onChange={(e) => setSelectedPlant(e.target.value)}>
+              <InputLabel>Plant</InputLabel>
+              <Select value={selectedPlant} label="Plant" onChange={(e) => setSelectedPlant(e.target.value)}>
                 {plants.map((p) => (
                   <MenuItem key={p.plantId} value={p.plantId}>{p.plantName}</MenuItem>
                 ))}
               </Select>
             </FormControl>
           )}
-        </Box>
+        />
       )}
 
-      {loadError && <Alert severity="warning" sx={{ mb: 2 }}>{loadError}</Alert>}
+      {loadError && <ErrorState severity="warning" description={loadError} onRetry={fetchData} />}
 
       {hmiState && (
-        <Card sx={{ mb: 3, background: 'linear-gradient(135deg, #1e2430 0%, #0066CC 100%)', color: 'white' }}>
+        <Card sx={{ mb: 3, bgcolor: 'navy', color: 'white', backgroundImage: 'linear-gradient(135deg, #0B1220 0%, #0B6E99 100%)' }}>
           <CardContent sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
               <PrecisionManufacturing sx={{ fontSize: 40, opacity: 0.9 }} />
               <Box>
-                <Typography variant="h6" fontWeight={700}>Plant HMI — Interactive P&ID</Typography>
+                <Typography variant="h6" fontWeight={700}>Plant HMI</Typography>
                 <Typography variant="body2" sx={{ opacity: 0.85 }}>
-                  Live process view with simulated power on/off and equipment controls
+                  Interactive process view for this site
                 </Typography>
                 <Box sx={{ mt: 1, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                   <Chip
                     size="small"
-                    label={hmiState.plantPowered ? 'Plant Power ON' : 'Plant Power OFF'}
-                    color={hmiState.plantPowered ? 'success' : 'default'}
+                    label={hmiState.plantPowered ? 'Plant power ON' : 'Plant power OFF'}
                     sx={{ bgcolor: hmiState.plantPowered ? 'success.dark' : 'rgba(255,255,255,0.15)', color: 'white' }}
                   />
                   <Chip
                     size="small"
-                    label={`${hmiState.runningCount} equipment running`}
+                    label={`${hmiState.runningCount ?? 0} equipment running`}
                     sx={{ bgcolor: 'rgba(255,255,255,0.15)', color: 'white' }}
                   />
                 </Box>
@@ -254,192 +285,218 @@ export default function Dashboard({ fixedPlantId, embedded = false, hidePlantSel
         </Card>
       )}
 
-      {!hmiState && selectedPlant && plants.find((p) => Number(p.plantId) === Number(selectedPlant))?.hmiEnabled === false && (
+      {!hmiState && selectedPlantMeta?.hmiEnabled === false && (
         <Alert severity="info" sx={{ mb: 3 }}>
           Plant HMI is off for this site until Control Center enables it.
         </Alert>
       )}
 
-      <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} md={4}>
-          <Card sx={{ bgcolor: hasHealthScore ? getHealthColor(healthStatus) : 'grey.600', color: 'white' }}>
+      <Grid container spacing={2} sx={{ mb: 3 }}>
+        <Grid item xs={12} sm={6} md={showGas ? 2.4 : 3}>
+          <Card sx={{ height: '100%', bgcolor: hasHealthScore ? getHealthColor(healthStatus) : 'action.hover', color: hasHealthScore ? 'white' : 'text.primary' }}>
             <CardContent>
-              <Typography variant="subtitle2">Plant Health Status</Typography>
-              <Typography variant="h3" fontWeight={700}>
-                {hasHealthScore ? `${healthScore}/100` : '—'}
+              <Typography variant="caption" sx={{ opacity: 0.85, fontWeight: 600 }}>Plant health</Typography>
+              <Typography variant="h4" fontWeight={700}>
+                {hasHealthScore ? `${healthScore}` : '—'}
+                {hasHealthScore && <Typography component="span" variant="body2"> / 100</Typography>}
               </Typography>
               <Chip
+                size="small"
                 label={hasHealthScore ? healthStatus : 'No score yet'}
-                sx={{ mt: 1, bgcolor: 'rgba(255,255,255,0.2)', color: 'white' }}
+                sx={{ mt: 1, bgcolor: hasHealthScore ? 'rgba(255,255,255,0.2)' : undefined, color: hasHealthScore ? 'white' : undefined }}
               />
               <LinearProgress
-                variant="determinate" value={hasHealthScore ? healthScore : 0}
-                sx={{ mt: 2, bgcolor: 'rgba(255,255,255,0.3)', '& .MuiLinearProgress-bar': { bgcolor: 'white' } }}
+                variant="determinate"
+                value={hasHealthScore ? healthScore : 0}
+                sx={{
+                  mt: 1.5, height: 6, borderRadius: 3,
+                  bgcolor: hasHealthScore ? 'rgba(255,255,255,0.3)' : undefined,
+                  '& .MuiLinearProgress-bar': { bgcolor: hasHealthScore ? 'white' : undefined },
+                }}
               />
             </CardContent>
           </Card>
         </Grid>
-        <Grid item xs={6} md={2}>
-          <Card><CardContent>
-            <Typography variant="caption" color="text.secondary">Active Alerts</Typography>
-            <Typography variant="h4" color="error.main" fontWeight={700}>{dashboard?.activeAlerts || 0}</Typography>
-          </CardContent></Card>
+        <Grid item xs={6} sm={3} md={showGas ? 2.4 : 3}>
+          <DashboardStatCard
+            label="Active alerts"
+            value={dashboard?.activeAlerts ?? alerts.length}
+            icon={<Warning fontSize="small" />}
+            color="error"
+            onClick={() => navigate('/alerts')}
+            hint="Open incidents"
+          />
         </Grid>
-        <Grid item xs={6} md={2}>
-          <Card><CardContent>
-            <Typography variant="caption" color="text.secondary">Active Nodes</Typography>
-            <Typography variant="h4" color="primary.main" fontWeight={700}>
-              {dashboard?.activeNodes || 0}/{dashboard?.totalNodes || 0}
-            </Typography>
-          </CardContent></Card>
+        <Grid item xs={6} sm={3} md={showGas ? 2.4 : 3}>
+          <DashboardStatCard
+            label="Nodes"
+            value={`${dashboard?.activeNodes ?? liveCount}/${dashboard?.totalNodes ?? nodes.length}`}
+            icon={<SensorsIcon fontSize="small" />}
+            color="primary"
+            hint={`${liveCount} live now`}
+          />
         </Grid>
-        <Grid item xs={12} md={4}>
-          <Card><CardContent>
-            <Typography variant="caption" color="text.secondary">Gas Production</Typography>
-            <Typography variant="h4" color="secondary.main" fontWeight={700}>
-              {(dashboard?.gasProduction || 0).toFixed(1)} m³/h
-            </Typography>
-          </CardContent></Card>
+        <Grid item xs={6} sm={3} md={showGas ? 2.4 : 3}>
+          <DashboardStatCard
+            label="Devices"
+            value={devices.length}
+            icon={<DevicesOther fontSize="small" />}
+            color="secondary"
+            hint="Registered hubs and gateways"
+            onClick={() => navigate('/sensors?tab=hubs')}
+          />
         </Grid>
+        {showGas && (
+          <Grid item xs={6} sm={3} md={2.4}>
+            <DashboardStatCard
+              label="Gas production"
+              value={Number(dashboard.gasProduction).toFixed(1)}
+              suffix="m³/h"
+              icon={<ShowChart fontSize="small" />}
+              color="success"
+            />
+          </Grid>
+        )}
       </Grid>
 
-      <Typography variant="h6" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
-        <BluetoothConnected fontSize="small" color="primary" />
-        Paired Devices
-      </Typography>
-      <Card sx={{ mb: 3 }}>
-        <TableContainer>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell>Device</TableCell>
-                <TableCell>Plant</TableCell>
-                <TableCell>Chip ID</TableCell>
-                <TableCell>Temp (°C)</TableCell>
-                <TableCell>Humidity (%)</TableCell>
-                <TableCell>Gas (raw)</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Last Reading</TableCell>
-                <TableCell align="right">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {pairedDevices.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={9} align="center">
-                    <Typography color="text.secondary" sx={{ py: 2 }}>
-                      No paired hubs for this plant.{' '}
-                      <Button size="small" onClick={() => navigate('/sensors?tab=pair')}>
-                        Pair Sensor Hub
-                      </Button>
-                    </Typography>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                pairedDevices.map((device) => (
-                  <TableRow key={device.chipId} hover>
-                    <TableCell>
-                      <Typography fontWeight={600}>{device.deviceName}</Typography>
-                      {device.deviceIp ? (
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                          <Typography variant="caption" color="text.secondary" fontFamily="monospace">
-                            {device.deviceIp}
-                          </Typography>
-                          <Tooltip title="Copy IP">
-                            <IconButton size="small" onClick={() => copyDeviceIp(device.deviceIp)}>
-                              <ContentCopy sx={{ fontSize: 14 }} />
-                            </IconButton>
-                          </Tooltip>
-                          <Tooltip title="Open hub /info">
-                            <IconButton size="small" component="a" href={`http://${device.deviceIp}/info`} target="_blank" rel="noreferrer">
-                              <ArrowForward sx={{ fontSize: 14 }} />
-                            </IconButton>
-                          </Tooltip>
-                        </Box>
-                      ) : (
-                        <Typography variant="caption" color="text.secondary">
-                          IP not saved yet — pair the hub under Field Devices or wait for the next reading
-                        </Typography>
-                      )}
-                    </TableCell>
-                    <TableCell>{device.plantName || '--'}</TableCell>
-                    <TableCell>
-                      <Typography variant="body2" fontFamily="monospace">{device.chipId}</Typography>
-                    </TableCell>
-                    <TableCell>{device.temperature != null ? device.temperature.toFixed(1) : '--'}</TableCell>
-                    <TableCell>{device.humidity != null ? device.humidity.toFixed(1) : '--'}</TableCell>
-                    <TableCell>{device.gas != null ? device.gas.toFixed(0) : '--'}</TableCell>
-                    <TableCell>
-                      <Chip label={effectiveDeviceStatus(device)} size="small" color={deviceStatusColor(effectiveDeviceStatus(device))} />
-                    </TableCell>
-                    <TableCell>{formatDate(device.lastReadingAt)}</TableCell>
-                    <TableCell align="right">
-                      <Tooltip title="Pull latest readings from ESP">
-                        <IconButton
-                          size="small"
-                          onClick={() => handleSyncDevice(device)}
-                          disabled={syncingChip === device.chipId}
-                        >
-                          {syncingChip === device.chipId ? <CircularProgress size={18} /> : <Refresh />}
-                        </IconButton>
-                      </Tooltip>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      </Card>
-
-      <Typography variant="h6" sx={{ mb: 2 }}>Sensor Overview</Typography>
-      {visibleSensorTypes.length === 0 ? (
+      <PageHeader
+        title="Registered devices"
+        subtitle="Hubs and gateways reported by the backend for this plant."
+        actions={(
+          <Button size="small" startIcon={<CellTower />} onClick={() => navigate('/sensors')}>
+            View devices
+          </Button>
+        )}
+      />
+      {devices.length === 0 ? (
         <Card sx={{ mb: 3 }}>
-          <CardContent>
-            <Typography color="text.secondary">
-              No sensors configured for this plant yet. Register devices and channels in Control Center, or add sensors in the Swarm app.
-            </Typography>
-          </CardContent>
+          <EmptyState
+            title="No devices on this plant"
+            description="Control Center assigns devices to this plant. After the hardware publishes telemetry, they appear here automatically."
+            actionLabel="View devices"
+            onAction={() => navigate('/sensors')}
+            compact
+          />
         </Card>
       ) : (
         <Grid container spacing={2} sx={{ mb: 3 }}>
-          {visibleSensorTypes.map((type) => (
-            <Grid item xs={6} sm={4} md={3} key={type}>
-              <Card>
-                <CardContent sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                  <Box sx={{ color: 'primary.main' }}>{sensorIcons[type] || <Thermostat />}</Box>
-                  <Box>
-                    <Typography variant="caption" color="text.secondary">{labels[type] || type}</Typography>
-                    <Typography variant="h6" fontWeight={600}>
-                      {readings[type] != null ? readings[type].toFixed(1) : '--'} {units[type] || ''}
-                    </Typography>
-                  </Box>
-                </CardContent>
-              </Card>
+          {devices.map((device) => (
+            <Grid item xs={12} md={6} lg={4} key={device.id || device.chipId || device.deviceUid}>
+              <DeviceCard
+                device={device}
+                labels={labels}
+                units={units}
+                onOpen={(d) => d.id && navigate(`/sensors/${d.id}`)}
+                onSync={handleSyncDevice}
+                syncing={syncingChip === (device.chipId || device.deviceUid)}
+              />
             </Grid>
           ))}
         </Grid>
       )}
 
-      <Typography variant="h6" sx={{ mb: 2 }}>Active Alerts</Typography>
+      <PageHeader
+        title="Discovered sensors"
+        subtitle="Every node and channel returned by the backend is listed. Counts update as telemetry arrives."
+      />
+      <SearchAndFilter
+        search={sensors.search}
+        onSearch={sensors.setSearch}
+        searchPlaceholder="Search sensors, tags, chip IDs…"
+        view={sensorView}
+        onViewChange={setSensorView}
+        sortKey={sensors.sortKey}
+        sortDir={sensors.sortDir}
+        onSortKey={sensors.toggleSort}
+        sortOptions={[
+          { value: 'nodeName', label: 'Name' },
+          { value: 'sensorType', label: 'Type' },
+          { value: 'lastValue', label: 'Reading' },
+          { value: 'lastReadingAt', label: 'Updated' },
+        ]}
+        filters={[
+          {
+            key: 'sensorType',
+            label: 'Type',
+            value: typeFilter,
+            onChange: setTypeFilter,
+            options: [
+              { value: 'ALL', label: 'All types' },
+              ...sensorTypes.map((t) => ({ value: t, label: labels[t] || t })),
+            ],
+          },
+          {
+            key: 'status',
+            label: 'Status',
+            value: statusFilter,
+            onChange: setStatusFilter,
+            options: [
+              { value: 'ALL', label: 'All statuses' },
+              { value: 'LIVE', label: 'Live' },
+              { value: 'STALE', label: 'Stale' },
+              { value: 'NO_DATA', label: 'No data' },
+              { value: 'OFFLINE', label: 'Offline' },
+            ],
+          },
+        ]}
+        countLabel={`${sensors.filteredCount} of ${sensors.total}`}
+      />
+
+      {nodes.length === 0 && !loadError ? (
+        <Card sx={{ mb: 3 }}>
+          <EmptyState
+            title="No sensors discovered yet"
+            description="When authenticated telemetry introduces a new channel, it appears here without a manual sensor form."
+            icon={<Favorite />}
+            compact
+          />
+        </Card>
+      ) : sensorView === 'grid' ? (
+        <Box sx={{ mb: 3 }}>
+          <SensorGrid
+            sensors={sensors.items}
+            labels={labels}
+            units={units}
+            page={sensors.page}
+            pageCount={sensors.pageCount}
+            total={sensors.total}
+            filteredCount={sensors.filteredCount}
+            onPage={sensors.setPage}
+            pageSize={SENSOR_PAGE_SIZE}
+          />
+        </Box>
+      ) : (
+        <Card sx={{ mb: 3 }}>
+          <SensorTable
+            sensors={sensors.items}
+            labels={labels}
+            units={units}
+            sortKey={sensors.sortKey}
+            sortDir={sensors.sortDir}
+            onSort={sensors.toggleSort}
+            page={sensors.page}
+            pageCount={sensors.pageCount}
+            total={sensors.total}
+            filteredCount={sensors.filteredCount}
+            onPage={sensors.setPage}
+            pageSize={SENSOR_PAGE_SIZE}
+          />
+        </Card>
+      )}
+
+      <PageHeader title="Active alerts" />
       <Card>
         <CardContent>
-          {alerts.length === 0 ? (
-            <Typography color="text.secondary">No active alerts. Plant operating normally.</Typography>
-          ) : (
-            alerts.map((alert) => (
-              <Box key={alert.id} sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', py: 1, borderBottom: '1px solid #eee' }}>
-                <Box>
-                  <Typography fontWeight={500}>{alert.title}</Typography>
-                  <Typography variant="body2" color="text.secondary">{alert.message}</Typography>
-                </Box>
-                <Chip
-                  label={alert.severity}
-                  size="small"
-                  color={alert.severity === 'CRITICAL' ? 'error' : alert.severity === 'WARNING' ? 'warning' : 'info'}
-                />
-              </Box>
-            ))
+          <AlertList
+            alerts={alerts}
+            maxItems={8}
+            emptyTitle="No active alerts"
+            emptyDescription="Plant operating without open incidents."
+          />
+          {alerts.length > 0 && (
+            <Button size="small" sx={{ mt: 1 }} onClick={() => navigate('/alerts')}>
+              View all alerts
+            </Button>
           )}
         </CardContent>
       </Card>
