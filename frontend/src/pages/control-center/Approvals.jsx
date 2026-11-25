@@ -6,6 +6,7 @@ import {
   DialogTitle, DialogContent, DialogActions, TextField, MenuItem,
 } from '@mui/material';
 import { controlCenterAPI } from '../../services/api';
+import { useFeedback } from '../../context/FeedbackContext';
 
 const reasonLabel = (reason) => {
   if (reason === 'PENDING_SIGNUP') return 'Signed up — awaiting approval';
@@ -14,6 +15,7 @@ const reasonLabel = (reason) => {
 };
 
 export default function Approvals() {
+  const { confirm } = useFeedback();
   const [tab, setTab] = useState('pending');
   const [users, setUsers] = useState([]);
   const [companies, setCompanies] = useState([]);
@@ -75,7 +77,8 @@ export default function Approvals() {
   };
 
   const reject = async (user) => {
-    if (!window.confirm(`Reject and disable ${user.email}?`)) return;
+    // UX-CHANGE UX-01 (in-app confirm). Original: if (!window.confirm(`Reject and disable ${user.email}?`)) return;
+    if (!(await confirm({ title: 'Reject sign-up?', message: `Reject and disable ${user.email}?`, confirmText: 'Reject', danger: true }))) return;
     try {
       await controlCenterAPI.rejectUser(user.id);
       setSuccess(`${user.email} rejected`);
@@ -86,7 +89,8 @@ export default function Approvals() {
   };
 
   const removeUser = async (user) => {
-    if (!window.confirm(`Permanently delete ${user.email}? This cannot be undone.`)) return;
+    // UX-CHANGE UX-01 (in-app confirm). Original: if (!window.confirm(`Permanently delete ${user.email}? This cannot be undone.`)) return;
+    if (!(await confirm({ title: 'Delete user permanently?', message: `Permanently delete ${user.email}? This cannot be undone.`, confirmText: 'Delete', danger: true }))) return;
     try {
       await controlCenterAPI.deleteUser(user.id);
       setSuccess(`${user.email} deleted`);

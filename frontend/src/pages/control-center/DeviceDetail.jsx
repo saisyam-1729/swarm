@@ -9,6 +9,7 @@ import {
 import { controlCenterAPI } from '../../services/api';
 import CopyableId from '../../components/common/CopyableId';
 import useSensorCatalog from '../../utils/useSensorCatalog';
+import { useFeedback } from '../../context/FeedbackContext';
 
 function downloadJson(filename, payload) {
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -31,6 +32,7 @@ function exportableConfig(provisioning) {
 }
 
 export default function DeviceDetail() {
+  const { confirm } = useFeedback();
   const { id } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -79,7 +81,8 @@ export default function DeviceDetail() {
   useEffect(() => { load(); }, [id]);
 
   const rotate = async () => {
-    if (!window.confirm('Rotate this device secret? The previous secret stops working immediately.')) return;
+    // UX-CHANGE UX-01 (in-app confirm). Original: if (!window.confirm('Rotate this device secret? The previous secret stops working immediately.')) return;
+    if (!(await confirm({ title: 'Rotate device secret?', message: 'Rotate this device secret? The previous secret stops working immediately.', confirmText: 'Rotate secret', danger: true }))) return;
     setSaving(true);
     try {
       const { data } = await controlCenterAPI.rotateDeviceSecret(id);
@@ -118,7 +121,8 @@ export default function DeviceDetail() {
       ACTIVE: 'Reactivate this device?',
       RETIRED: 'Retire this device permanently? Publishing will be rejected.',
     };
-    if (!window.confirm(labels[lifecycle] || `Set lifecycle to ${lifecycle}?`)) return;
+    // UX-CHANGE UX-01 (in-app confirm). Original: if (!window.confirm(labels[lifecycle] || `Set lifecycle to ${lifecycle}?`)) return;
+    if (!(await confirm({ title: 'Change device lifecycle?', message: labels[lifecycle] || `Set lifecycle to ${lifecycle}?`, confirmText: 'Confirm', danger: lifecycle !== 'ACTIVE' }))) return;
     setSaving(true);
     try {
       const { data } = await controlCenterAPI.setDeviceLifecycle(id, { lifecycle });
@@ -133,7 +137,8 @@ export default function DeviceDetail() {
   };
 
   const revoke = async () => {
-    if (!window.confirm('Revoke credentials? The current secret stops working immediately.')) return;
+    // UX-CHANGE UX-01 (in-app confirm). Original: if (!window.confirm('Revoke credentials? The current secret stops working immediately.')) return;
+    if (!(await confirm({ title: 'Revoke credentials?', message: 'Revoke credentials? The current secret stops working immediately.', confirmText: 'Revoke', danger: true }))) return;
     setSaving(true);
     try {
       await controlCenterAPI.revokeDeviceSecret(id);
@@ -147,7 +152,8 @@ export default function DeviceDetail() {
   };
 
   const reassign = async () => {
-    if (!window.confirm('Reassign this device? The previous tenant loses access immediately. Historical telemetry stays on the old plant.')) return;
+    // UX-CHANGE UX-01 (in-app confirm). Original: if (!window.confirm('Reassign this device? The previous tenant loses access immediately. Historical telemetry stays on the old plant.')) return;
+    if (!(await confirm({ title: 'Reassign device?', message: 'Reassign this device? The previous tenant loses access immediately. Historical telemetry stays on the old plant.', confirmText: 'Reassign', danger: true }))) return;
     setSaving(true);
     try {
       const { data } = await controlCenterAPI.reassignDevice(id, {

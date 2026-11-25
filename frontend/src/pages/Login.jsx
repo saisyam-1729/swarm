@@ -53,6 +53,8 @@ export default function Login() {
   const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
+    // UX-CHANGE UX-03: clear the sign-up success banner on submit (original only cleared the error).
+    setSuccess('');
     try {
       const loggedIn = await login(email, password);
       navigate(getHomeRoute(loggedIn.role));
@@ -64,6 +66,8 @@ export default function Login() {
   const handleForgot = async (e) => {
     e.preventDefault();
     setError('');
+    // UX-CHANGE UX-03: clear any previous success banner on submit (original only cleared the error).
+    setSuccess('');
     try {
       const { authAPI } = await import('../services/api');
       await authAPI.forgotPassword({ email });

@@ -3,17 +3,19 @@ import { useState, useEffect } from 'react';
 import {
   Box, Typography, Card, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem, Grid, CircularProgress,
-  FormControl, InputLabel, Select,
+  FormControl, InputLabel, Select, Tooltip,
 } from '@mui/material';
 import { Add, Download } from '@mui/icons-material';
 import { reportAPI, plantAPI } from '../services/api';
 import { formatDate } from '../utils/constants';
 import { pageHeaderRow, pageTitleSx, responsiveSelect } from '../utils/responsive';
+import { useFeedback } from '../context/FeedbackContext';
 
 const REPORT_TYPES = ['DAILY', 'WEEKLY', 'MONTHLY', 'PLANT_SUMMARY', 'GAS_PRODUCTION', 'ALERTS', 'PLANT_HEALTH'];
 const FORMATS = ['PDF', 'EXCEL', 'CSV'];
 
 export default function Reports({ fixedPlantId, embedded = false, hidePlantSelector = false }) {
+  const { notify } = useFeedback();
   const [reports, setReports] = useState([]);
   const [plants, setPlants] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -50,11 +52,17 @@ export default function Reports({ fixedPlantId, embedded = false, hidePlantSelec
     loadReports(selectedPlant);
   }, [selectedPlant]);
 
+  // UX-CHANGE UX-09: original awaited generate() with no try/catch and no message.
   const handleGenerate = async () => {
     if (!form.plantId) return;
-    await reportAPI.generate({ ...form, plantId: Number(form.plantId) });
-    setDialogOpen(false);
-    loadReports(form.plantId);
+    try {
+      await reportAPI.generate({ ...form, plantId: Number(form.plantId) });
+      setDialogOpen(false);
+      notify('Report added to the list.', 'success');
+      loadReports(form.plantId);
+    } catch (err) {
+      notify(err.response?.data?.message || 'Could not generate the report.', 'error');
+    }
   };
 
   return (
@@ -94,7 +102,12 @@ export default function Reports({ fixedPlantId, embedded = false, hidePlantSelec
                     <TableCell>{r.fileFormat}</TableCell>
                     <TableCell>{formatDate(r.createdAt)}</TableCell>
                     <TableCell>
-                      <Button size="small" startIcon={<Download />}>Download</Button>
+                      {/* UX-CHANGE UX-09: original was an enabled Download button with no onClick (backend produces no file). */}
+                      <Tooltip title="File export is not available yet. Reports are recorded here, but no PDF, Excel or CSV file is generated.">
+                        <span>
+                          <Button size="small" startIcon={<Download />} disabled>Download</Button>
+                        </span>
+                      </Tooltip>
                     </TableCell>
                   </TableRow>
                 ))}

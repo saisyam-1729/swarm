@@ -26,6 +26,7 @@ import SensorGrid from '../components/telemetry/SensorGrid';
 import SensorTable from '../components/telemetry/SensorTable';
 import DeviceCard from '../components/telemetry/DeviceCard';
 import { formatReading, readingFreshness } from '../utils/sensorPresentation';
+import { useFeedback } from '../context/FeedbackContext';
 
 const emptyForm = {
   plantId: '',
@@ -43,6 +44,7 @@ function tabFromParams(searchParams) {
 const PAGE_SIZE = 24;
 
 export default function Sensors({ fixedPlantId, embedded = false, hidePlantSelector = false }) {
+  const { confirm } = useFeedback();
   const { isSuperAdmin } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -144,7 +146,8 @@ export default function Sensors({ fixedPlantId, embedded = false, hidePlantSelec
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Remove this instrument from the plant inventory?')) return;
+    // UX-CHANGE UX-01 (in-app confirm). Original: if (!window.confirm('Remove this instrument from the plant inventory?')) return;
+    if (!(await confirm({ title: 'Remove instrument?', message: 'Remove this instrument from the plant inventory?', confirmText: 'Remove', danger: true }))) return;
     await sensorAPI.delete(id);
     loadData();
   };

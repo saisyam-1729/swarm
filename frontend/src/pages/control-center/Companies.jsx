@@ -8,6 +8,7 @@ import {
 } from '@mui/material';
 import { Add, ChevronRight } from '@mui/icons-material';
 import { controlCenterAPI } from '../../services/api';
+import { useFeedback } from '../../context/FeedbackContext';
 
 const FILTERS = [
   { id: 'ALL', label: 'All' },
@@ -26,6 +27,7 @@ const stateChip = (state) => {
 };
 
 export default function Companies() {
+  const { confirm } = useFeedback();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [companies, setCompanies] = useState([]);
@@ -75,7 +77,8 @@ export default function Companies() {
   };
 
   const removeCompany = async (c) => {
-    if (!window.confirm(`Delete tenant "${c.name}"? Plants stay in inventory; users are unlinked.`)) return;
+    // UX-CHANGE UX-01 (in-app confirm). Original: if (!window.confirm(`Delete tenant "${c.name}"? Plants stay in inventory; users are unlinked.`)) return;
+    if (!(await confirm({ title: 'Delete tenant?', message: `Delete tenant "${c.name}"? Plants stay in inventory; users are unlinked.`, confirmText: 'Delete tenant', danger: true }))) return;
     try {
       await controlCenterAPI.deleteCompany(c.id);
       load();

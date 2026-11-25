@@ -9,6 +9,7 @@ import {
 import { Add, ContentCopy, Delete, Edit, Link as LinkIcon, Refresh, VpnKey } from '@mui/icons-material';
 import axios from 'axios';
 import { partnerAPI, plantAPI, resolveApiBase } from '../services/api';
+import { useFeedback } from '../context/FeedbackContext';
 
 const apiBase = resolveApiBase();
 
@@ -31,6 +32,7 @@ function formatDate(value) {
 const PARTNER_API_BASE = `${apiBase}/partner/v1`;
 
 export default function Partners() {
+  const { confirm } = useFeedback();
   const [organizations, setOrganizations] = useState([]);
   const [plants, setPlants] = useState([]);
   const [selectedOrgId, setSelectedOrgId] = useState(null);
@@ -161,7 +163,8 @@ export default function Partners() {
   };
 
   const handleRevokeKey = async (keyId) => {
-    if (!window.confirm('Revoke this API key? emPOWER will lose access immediately.')) return;
+    // UX-CHANGE UX-01 (in-app confirm). Original: if (!window.confirm('Revoke this API key? emPOWER will lose access immediately.')) return;
+    if (!(await confirm({ title: 'Revoke API key?', message: 'Revoke this API key? emPOWER will lose access immediately.', confirmText: 'Revoke key', danger: true }))) return;
     setError('');
     try {
       await partnerAPI.revokeApiKey(keyId);

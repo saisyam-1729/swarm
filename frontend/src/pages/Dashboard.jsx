@@ -26,12 +26,14 @@ import SensorTable from '../components/telemetry/SensorTable';
 import DeviceCard from '../components/telemetry/DeviceCard';
 import AlertList from '../components/telemetry/AlertList';
 import { readingFreshness } from '../utils/sensorPresentation';
+import { useFeedback } from '../context/FeedbackContext';
 
 const DASHBOARD_POLL_MS = 10000;
 const LAN_ESP_SYNC_MS = 10000;
 const SENSOR_PAGE_SIZE = 24;
 
 export default function Dashboard({ fixedPlantId, embedded = false, hidePlantSelector = false }) {
+  const { notify } = useFeedback();
   const navigate = useNavigate();
   const [plants, setPlants] = useState([]);
   const [selectedPlant, setSelectedPlant] = useState(fixedPlantId || '');
@@ -132,7 +134,8 @@ export default function Dashboard({ fixedPlantId, embedded = false, hidePlantSel
     const ip = device.deviceIp || device.lastIp || creds.ip;
     const password = creds.password;
     if (!ip || !password) {
-      window.alert('Re-pair the hub from Field Devices → Pair Sensor Hub to refresh readings (device password required).');
+      // UX-CHANGE UX-02 (toast instead of browser alert). Original: window.alert('Re-pair the hub from Field Devices → Pair Sensor Hub to refresh readings (device password required).');
+      notify('Re-pair the hub from Field Devices → Pair Sensor Hub to refresh readings (device password required).', 'warning');
       return;
     }
     const chip = device.chipId || device.deviceUid;
@@ -148,7 +151,8 @@ export default function Dashboard({ fixedPlantId, embedded = false, hidePlantSel
       });
       fetchData();
     } catch (e) {
-      window.alert(e.response?.data?.message || e.message || 'Failed to sync readings from ESP');
+      // UX-CHANGE UX-02 (toast instead of browser alert). Original: window.alert(e.response?.data?.message || e.message || 'Failed to sync readings from ESP');
+      notify(e.response?.data?.message || e.message || 'Failed to sync readings from ESP', 'error');
     } finally {
       setSyncingChip('');
     }

@@ -8,6 +8,7 @@ import {
 } from '@mui/material';
 import { controlCenterAPI } from '../../services/api';
 import CopyableId from '../../components/common/CopyableId';
+import { useFeedback } from '../../context/FeedbackContext';
 
 const plantKey = (p) => Number(p?.plantId ?? p?.id);
 
@@ -17,6 +18,7 @@ const unwrapList = (res) => {
 };
 
 export default function CompanyDetail() {
+  const { confirm } = useFeedback();
   const { id } = useParams();
   const navigate = useNavigate();
   const companyId = id;
@@ -65,7 +67,8 @@ export default function CompanyDetail() {
 
   const savePlants = async () => {
     if (selected.length === 0 && (detail?.plants || []).length > 0) {
-      const ok = window.confirm('No plants are checked. This removes every plant from the company. Continue?');
+      // UX-CHANGE UX-01 (in-app confirm). Original: const ok = window.confirm('No plants are checked. This removes every plant from the company. Continue?');
+      const ok = await confirm({ title: 'Remove all plants?', message: 'No plants are checked. This removes every plant from the company. Continue?', confirmText: 'Remove all', danger: true });
       if (!ok) return;
     }
     setSaving(true);

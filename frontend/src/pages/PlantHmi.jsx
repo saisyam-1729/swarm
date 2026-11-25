@@ -24,8 +24,10 @@ import {
 } from '../data/swarmControl';
 import { equipmentTagsForZones } from '../data/pidRegistry';
 import { contentMaxWidth, pageHeaderRow, pageTitleSx, responsiveSelect } from '../utils/responsive';
+import { useFeedback } from '../context/FeedbackContext';
 
 export default function PlantHmi({ fixedPlantId, hidePlantSelector = false, embedded = false }) {
+  const { notify } = useFeedback();
   const { canManagePlants, user } = useAuth();
   const [searchParams] = useSearchParams();
   const [plants, setPlants] = useState([]);
@@ -106,7 +108,8 @@ export default function PlantHmi({ fixedPlantId, hidePlantSelector = false, embe
       setState(data.data);
       logAudit(action, 'PLANT');
     } catch (err) {
-      window.alert(err.response?.data?.message || 'Command failed');
+      // UX-CHANGE UX-02 (toast instead of browser alert). Original: window.alert(err.response?.data?.message || 'Command failed');
+      notify(err.response?.data?.message || 'Command failed', 'error');
     } finally {
       setCmdLoading(false);
     }
@@ -120,7 +123,8 @@ export default function PlantHmi({ fixedPlantId, hidePlantSelector = false, embe
       setState(data.data);
       logAudit(action, tagNo);
     } catch (err) {
-      window.alert(err.response?.data?.message || 'Command failed');
+      // UX-CHANGE UX-02 (toast instead of browser alert). Original: window.alert(err.response?.data?.message || 'Command failed');
+      notify(err.response?.data?.message || 'Command failed', 'error');
     } finally {
       setCmdLoading(false);
     }

@@ -15,8 +15,11 @@ import LoadingSkeleton from '../components/common/LoadingSkeleton';
 import ErrorState from '../components/common/ErrorState';
 import CollectionPager from '../components/common/CollectionPager';
 import useCollection from '../utils/useCollection';
+import { useFeedback } from '../context/FeedbackContext';
 
 export default function Alerts({ fixedPlantId, embedded = false, hidePlantSelector = false }) {
+  const { notify } = useFeedback();
+  const [busyId, setBusyId] = useState(null);
   const [plants, setPlants] = useState([]);
   const [selectedPlant, setSelectedPlant] = useState(fixedPlantId || '');
   const [alerts, setAlerts] = useState([]);
@@ -70,15 +73,29 @@ export default function Alerts({ fixedPlantId, embedded = false, hidePlantSelect
 
   useEffect(() => { loadAlerts(); }, [tab, selectedPlant]);
 
-  const handleAcknowledge = async (id) => {
-    await alertAPI.acknowledge(id);
-    loadAlerts();
+  // UX-CHANGE UX-10: original handlers were `await alertAPI.acknowledge(id); loadAlerts();` and
+  // `await alertAPI.resolve(id); loadAlerts();` with no feedback, no error handling, no busy state.
+  // Same API calls; adds a success/error toast and disables the buttons while the request runs.
+  const runAlertAction = async (alert, action) => {
+    setBusyId(alert.id);
+    try {
+      if (action === 'acknowledge') await alertAPI.acknowledge(alert.id);
+      else await alertAPI.resolve(alert.id);
+      notify(
+        action === 'acknowledge'
+          ? `Acknowledged "${alert.title}". It moves to the Acknowledged tab.`
+          : `Resolved "${alert.title}".`,
+        'success',
+      );
+      loadAlerts();
+    } catch (err) {
+      notify(err.response?.data?.message || `Could not ${action} this alert.`, 'error');
+    } finally {
+      setBusyId(null);
+    }
   };
-
-  const handleResolve = async (id) => {
-    await alertAPI.resolve(id);
-    loadAlerts();
-  };
+  const handleAcknowledge = (alert) => runAlertAction(alert, 'acknowledge');
+  const handleResolve = (alert) => runAlertAction(alert, 'resolve');
 
   const collection = useCollection(alerts, {
     searchKeys: ['title', 'message', 'plantName', 'severity'],
@@ -149,10 +166,10 @@ export default function Alerts({ fixedPlantId, embedded = false, hidePlantSelect
                     <TableCell>{formatDate(a.createdAt)}</TableCell>
                     <TableCell>
                       {a.status === 'ACTIVE' && (
-                        <Button size="small" startIcon={<CheckCircle />} onClick={() => handleAcknowledge(a.id)}>Acknowledge</Button>
+                        <Button size="small" startIcon={<CheckCircle />} disabled={busyId === a.id} onClick={() => handleAcknowledge(a)}>Acknowledge</Button>
                       )}
                       {a.status !== 'RESOLVED' && (
-                        <Button size="small" startIcon={<DoneAll />} onClick={() => handleResolve(a.id)}>Resolve</Button>
+                        <Button size="small" startIcon={<DoneAll />} disabled={busyId === a.id} onClick={() => handleResolve(a)}>Resolve</Button>
                       )}
                     </TableCell>
                   </TableRow>

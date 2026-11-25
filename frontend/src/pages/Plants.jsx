@@ -13,6 +13,7 @@ import {
   PLANT_TYPES, formatPlantType, getHealthColor, HARDWARE_PRESETS,
 } from '../utils/constants';
 import useSensorCatalog from '../utils/useSensorCatalog';
+import { useFeedback } from '../context/FeedbackContext';
 
 const emptyForm = {
   plantName: '', plantType: 'BIOGAS', location: '', capacity: '', feedstockType: '',
@@ -24,6 +25,7 @@ const emptySensorForm = {
 };
 
 export default function Plants() {
+  const { confirm } = useFeedback();
   const { isSuperAdmin } = useAuth();
   const [plants, setPlants] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -107,7 +109,8 @@ export default function Plants() {
   };
 
   const handleDelete = async (id) => {
-    if (window.confirm('Delete this plant?')) {
+    // UX-CHANGE UX-01 (in-app confirm). Original: if (window.confirm('Delete this plant?')) {
+    if (await confirm({ title: 'Delete plant?', message: 'Delete this plant?', confirmText: 'Delete', danger: true })) {
       await plantAPI.delete(id);
       loadPlants();
     }
@@ -148,7 +151,8 @@ export default function Plants() {
   };
 
   const handleSensorDelete = async (nodeId) => {
-    if (!window.confirm('Delete this sensor node?')) return;
+    // UX-CHANGE UX-01 (in-app confirm). Original: if (!window.confirm('Delete this sensor node?')) return;
+    if (!(await confirm({ title: 'Delete sensor node?', message: 'Delete this sensor node?', confirmText: 'Delete', danger: true }))) return;
     await sensorAPI.delete(nodeId);
     await loadPlantSensors(editId);
   };
